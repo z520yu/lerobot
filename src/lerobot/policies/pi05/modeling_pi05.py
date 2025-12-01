@@ -598,7 +598,14 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         return time.to(dtype=torch.float32, device=device)
 
     def embed_prefix(
-        self, images, img_masks, tokens, masks
+        self,
+        images,
+        img_masks,
+        tokens,
+        masks,
+        extra_prefix_embs: torch.Tensor | None = None,
+        extra_pad_masks: torch.Tensor | None = None,
+        extra_att_masks: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Embed images with SigLIP and language tokens with embedding layer."""
         embs = []
@@ -637,6 +644,14 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
 
         bsize = pad_masks.shape[0]
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
+
+        # 可选拼接外部前缀（如几何 token）
+        if extra_prefix_embs is not None:
+            if extra_pad_masks is None or extra_att_masks is None:
+                raise ValueError("extra_pad_masks and extra_att_masks are required when extra_prefix_embs is provided")
+            embs = torch.cat([embs, extra_prefix_embs], dim=1)
+            pad_masks = torch.cat([pad_masks, extra_pad_masks], dim=1)
+            att_masks = torch.cat([att_masks, extra_att_masks], dim=1)
 
         return embs, pad_masks, att_masks
 
@@ -687,7 +702,19 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
 
         return embs, pad_masks, att_masks, adarms_cond
 
-    def forward(self, images, img_masks, tokens, masks, actions, noise=None, time=None) -> Tensor:
+    def forward(
+        self,
+        images,
+        img_masks,
+        tokens,
+        masks,
+        actions,
+        noise=None,
+        time=None,
+        extra_prefix_embs: torch.Tensor | None = None,
+        extra_pad_masks: torch.Tensor | None = None,
+        extra_att_masks: torch.Tensor | None = None,
+    ) -> Tensor:
         """Do a full training forward pass and compute the loss."""
         if noise is None:
             noise = self.sample_noise(actions.shape, actions.device)
@@ -699,7 +726,15 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
 
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, tokens, masks)
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+            images,
+            img_masks,
+            tokens,
+            masks,
+            extra_prefix_embs=extra_prefix_embs,
+            extra_pad_masks=extra_pad_masks,
+            extra_att_masks=extra_att_masks,
+        )
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(x_t, time)
 
         if (
@@ -751,6 +786,9 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         masks,
         noise=None,
         num_steps=None,
+        extra_prefix_embs: torch.Tensor | None = None,
+        extra_pad_masks: torch.Tensor | None = None,
+        extra_att_masks: torch.Tensor | None = None,
         **kwargs: Unpack[ActionSelectKwargs],
     ) -> Tensor:
         """Do a full inference forward and compute the action."""
@@ -769,7 +807,15 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
             )  # Use config max_action_dim for internal processing
             noise = self.sample_noise(actions_shape, device)
 
-        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, tokens, masks)
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+            images,
+            img_masks,
+            tokens,
+            masks,
+            extra_prefix_embs=extra_prefix_embs,
+            extra_pad_masks=extra_pad_masks,
+            extra_att_masks=extra_att_masks,
+        )
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
 
@@ -1189,7 +1235,14 @@ class PI05Policy(PreTrainedPolicy):
         return self._action_queue.popleft()
 
     @torch.no_grad()
-    def predict_action_chunk(self, batch: dict[str, Tensor], **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
+    def predict_action_chunk(
+        self,
+        batch: dict[str, Tensor],
+        extra_prefix_embs: torch.Tensor | None = None,
+        extra_pad_masks: torch.Tensor | None = None,
+        extra_att_masks: torch.Tensor | None = None,
+        **kwargs: Unpack[ActionSelectKwargs],
+    ) -> Tensor:
         """Predict a chunk of actions given environment observations."""
         self.eval()
 
@@ -1198,7 +1251,16 @@ class PI05Policy(PreTrainedPolicy):
         tokens, masks = batch[f"{OBS_LANGUAGE_TOKENS}"], batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
 
         # Sample actions using the model (pass through RTC kwargs, no separate state needed for PI05)
-        actions = self.model.sample_actions(images, img_masks, tokens, masks, **kwargs)
+        actions = self.model.sample_actions(
+            images,
+            img_masks,
+            tokens,
+            masks,
+            extra_prefix_embs=extra_prefix_embs,
+            extra_pad_masks=extra_pad_masks,
+            extra_att_masks=extra_att_masks,
+            **kwargs,
+        )
 
         # Unpad actions to actual action dimension
         original_action_dim = self.config.output_features[ACTION].shape[0]
@@ -1206,7 +1268,13 @@ class PI05Policy(PreTrainedPolicy):
 
         return actions
 
-    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
+    def forward(
+        self,
+        batch: dict[str, Tensor],
+        extra_prefix_embs: torch.Tensor | None = None,
+        extra_pad_masks: torch.Tensor | None = None,
+        extra_att_masks: torch.Tensor | None = None,
+    ) -> tuple[Tensor, dict]:
         """Run the batch through the model and compute the loss for training."""
 
         # Prepare inputs
@@ -1216,7 +1284,16 @@ class PI05Policy(PreTrainedPolicy):
         actions = self.prepare_action(batch)
 
         # Compute loss (no separate state needed for PI05)
-        losses = self.model.forward(images, img_masks, tokens, masks, actions)
+        losses = self.model.forward(
+            images,
+            img_masks,
+            tokens,
+            masks,
+            actions,
+            extra_prefix_embs=extra_prefix_embs,
+            extra_pad_masks=extra_pad_masks,
+            extra_att_masks=extra_att_masks,
+        )
 
         # Truncate losses to actual action dimensions
         original_action_dim = self.config.output_features[ACTION].shape[0]
