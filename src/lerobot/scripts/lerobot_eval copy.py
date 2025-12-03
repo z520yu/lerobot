@@ -58,6 +58,7 @@ from copy import deepcopy
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
+import os
 from pprint import pformat
 from typing import Any, TypedDict
 
@@ -656,6 +657,9 @@ def eval_main(cfg: EvalPipelineConfig):
     # Create environment-specific preprocessor and postprocessor (e.g., for LIBERO environments)
     env_preprocessor, env_postprocessor = make_env_pre_post_processors(env_cfg=cfg.env)
 
+    # 视频目录可单独指定本地路径以避免 NAS/gvfs 限制
+    videos_base = Path(os.environ.get("EVAL_VIDEOS_DIR", cfg.output_dir / "videos"))
+
     with torch.no_grad(), torch.autocast(device_type=device.type) if cfg.policy.use_amp else nullcontext():
         info = eval_policy_all(
             envs=envs,
@@ -668,7 +672,7 @@ def eval_main(cfg: EvalPipelineConfig):
             geom_adapter=geom_adapter,
             n_episodes=cfg.eval.n_episodes,
             max_episodes_rendered=10,
-            videos_dir=Path(cfg.output_dir) / "videos",
+            videos_dir=videos_base,
             start_seed=cfg.seed,
             max_parallel_tasks=cfg.env.max_parallel_tasks,
         )

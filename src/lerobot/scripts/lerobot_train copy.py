@@ -21,6 +21,7 @@ from typing import Any
 
 import torch
 from pathlib import Path
+import os
 from accelerate import Accelerator
 from termcolor import colored
 from torch.optim import Optimizer
@@ -39,7 +40,12 @@ from lerobot.policies.pi05.modeling_pi05 import get_gemma_config
 from lerobot.policies.pi05.geom_adapter import GeometryTokenAdapter
 from lerobot.rl.wandb_utils import WandBLogger
 from depth_anything_3.api import DepthAnything3
-from lerobot.scripts.lerobot_eval import eval_policy_all
+from importlib.machinery import SourceFileLoader
+# 动态加载定制 eval（支持几何前缀、本地视频配置）
+_eval_loader = SourceFileLoader(
+    "lerobot_eval_copy", str(Path(__file__).resolve().parent / "lerobot_eval copy.py")
+)
+eval_policy_all = _eval_loader.load_module().eval_policy_all
 from lerobot.utils.logging_utils import AverageMeter, MetricsTracker
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.train_utils import (
@@ -507,6 +513,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 step_id = get_step_identifier(step, cfg.steps)
                 logging.info(f"Eval policy at step {step}")
                 with torch.no_grad(), accelerator.autocast():
+                    videos_root = Path(os.environ.get("TRAIN_EVAL_VIDEOS_DIR", cfg.output_dir / "eval"))
+                    videos_dir = videos_root / f"videos_step_{step_id}"
                     eval_info = eval_policy_all(
                         envs=eval_env,  # dict[suite][task_id] -> vec_env
                         policy=accelerator.unwrap_model(policy),
@@ -514,8 +522,10 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                         env_postprocessor=env_postprocessor,
                         preprocessor=preprocessor,
                         postprocessor=postprocessor,
+                        geom_model=geom_model,
+                        geom_adapter=geom_adapter,
                         n_episodes=cfg.eval.n_episodes,
-                        videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
+                        videos_dir=videos_dir,
                         max_episodes_rendered=4,
                         start_seed=cfg.seed,
                         max_parallel_tasks=cfg.env.max_parallel_tasks,

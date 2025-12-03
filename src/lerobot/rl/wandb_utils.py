@@ -61,7 +61,9 @@ class WandBLogger:
 
     def __init__(self, cfg: TrainPipelineConfig):
         self.cfg = cfg.wandb
-        self.log_dir = cfg.output_dir
+        # 允许通过环境变量覆盖 wandb 日志目录，默认仍用 output_dir
+        env_wandb_dir = os.environ.get("WANDB_DIR", None)
+        self.log_dir = Path(env_wandb_dir) if env_wandb_dir else cfg.output_dir
         self.job_name = cfg.job_name
         self.env_fps = cfg.env.fps if cfg.env else None
         self._group = cfg_to_group(cfg)
