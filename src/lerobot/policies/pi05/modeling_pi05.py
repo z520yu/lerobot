@@ -224,19 +224,20 @@ def compute_layer_complete(
     adarms_cond,
     paligemma,
     gemma_expert,
-    model_index_list=None,
+    geom_tokens=None,
+    geom_k_proj: nn.Linear | None = None,
+    geom_v_proj: nn.Linear | None = None,
+    geom_alpha: torch.Tensor | None = None,
 ):
-    # model_index_list 映射每个段使用的模型索引，默认两段：[0, 1]
     models = [paligemma.language_model, gemma_expert.model]
-    if model_index_list is None:
-        model_index_list = list(range(len(inputs_embeds)))
     query_states = []
     key_states = []
     value_states = []
     gates = []
+    action_query_state = None
+    action_layer = None
     for i, hidden_states in enumerate(inputs_embeds):
-        model_idx = model_index_list[i]
-        layer = models[model_idx].layers[layer_idx]
+        layer = models[i].layers[layer_idx]
         hidden_states, gate = layer.input_layernorm(hidden_states, cond=adarms_cond[i])  # noqa: PLW2901
         gates.append(gate)
         input_shape = hidden_states.shape[:-1]
@@ -247,6 +248,9 @@ def compute_layer_complete(
         query_states.append(query_state)
         key_states.append(key_state)
         value_states.append(value_state)
+        if i == 1:
+            action_query_state = query_state
+            action_layer = layer
     # Concatenate and process attention
     query_states = torch.cat(query_states, dim=2)
     key_states = torch.cat(key_states, dim=2)
@@ -280,12 +284,25 @@ def compute_layer_complete(
     outputs_embeds = []
     start_pos = 0
     for i, hidden_states in enumerate(inputs_embeds):
-        model_idx = model_index_list[i]
-        layer = models[model_idx].layers[layer_idx]
+        layer = models[i].layers[layer_idx]
         end_pos = start_pos + hidden_states.shape[1]
         if att_output.dtype != layer.self_attn.o_proj.weight.dtype:
             att_output = att_output.to(layer.self_attn.o_proj.weight.dtype)
         out_emb = layer.self_attn.o_proj(att_output[:, start_pos:end_pos])
+        # 几何 cross：动作查询 -> 几何 KV（几何不进动作 FFN）
+        if i == 1 and geom_tokens is not None and geom_k_proj is not None and geom_v_proj is not None:
+            q = action_query_state  # (B, heads, L_action, head_dim)
+            B, H, Lq, D = q.shape
+            k = geom_k_proj(geom_tokens).view(B, geom_tokens.shape[1], H, D).transpose(1, 2)
+            v = geom_v_proj(geom_tokens).view(B, geom_tokens.shape[1], H, D).transpose(1, 2)
+            if geom_alpha is not None:
+                k = k * geom_alpha
+                v = v * geom_alpha
+            cross_out, _ = modeling_gemma.eager_attention_forward(
+                layer.self_attn, q, k, v, None, layer.self_attn.scaling
+            )
+            cross_out = cross_out.reshape(B, Lq, H * D)
+            out_emb = out_emb + cross_out
         # first residual
         out_emb = modeling_gemma._gated_residual(hidden_states, out_emb, gates[i])  # noqa: SLF001
         after_first_residual = out_emb.clone()
@@ -389,6 +406,10 @@ class PaliGemmaWithExpertModel(
         self.paligemma = PaliGemmaForConditionalGeneration(config=vlm_config_hf)
         self.gemma_expert = GemmaForCausalLM(config=action_expert_config_hf)
         self.gemma_expert.model.embed_tokens = None
+        # 几何 cross-attn 投影
+        self.geom_k_proj = nn.Linear(action_expert_config.width, action_expert_config.width)
+        self.geom_v_proj = nn.Linear(action_expert_config.width, action_expert_config.width)
+        self.geom_alpha = nn.Parameter(torch.tensor(1.0))
 
         self.to_bfloat16_for_selected_params(precision)
 
@@ -428,72 +449,11 @@ class PaliGemmaWithExpertModel(
         inputs_embeds: list[torch.FloatTensor] | None = None,
         use_cache: bool | None = None,
         adarms_cond: list[torch.Tensor] | None = None,
+        geom_tokens: torch.Tensor | None = None,
     ):
         if adarms_cond is None:
             adarms_cond = [None, None]
-        # 三段场景：len(inputs_embeds)==3，禁用 cache，走统一路径
-        if inputs_embeds is not None and len(inputs_embeds) == 3:
-            use_cache = False
-            model_index_list = [0, 1, 1]  # 几何和动作都走 gemma_expert
-            num_layers = self.paligemma.config.text_config.num_hidden_layers
-            use_gradient_checkpointing = (
-                hasattr(self.gemma_expert.model, "gradient_checkpointing")
-                and self.gemma_expert.model.gradient_checkpointing
-                and self.training
-            ) or (hasattr(self, "gradient_checkpointing") and self.gradient_checkpointing and self.training)
-            for layer_idx in range(num_layers):
-                if use_gradient_checkpointing:
-                    inputs_embeds = torch.utils.checkpoint.checkpoint(
-                        compute_layer_complete,
-                        layer_idx,
-                        inputs_embeds,
-                        attention_mask,
-                        position_ids,
-                        adarms_cond,
-                        use_reentrant=False,
-                        preserve_rng_state=False,
-                        paligemma=self.paligemma,
-                        gemma_expert=self.gemma_expert,
-                        model_index_list=model_index_list,
-                    )
-                else:
-                    inputs_embeds = compute_layer_complete(
-                        layer_idx,
-                        inputs_embeds,
-                        attention_mask,
-                        position_ids,
-                        adarms_cond,
-                        paligemma=self.paligemma,
-                        gemma_expert=self.gemma_expert,
-                        model_index_list=model_index_list,
-                    )
-
-            def compute_final_norms(inputs_embeds, adarms_cond):
-                outputs_embeds = []
-                for i, hidden_states in enumerate(inputs_embeds):
-                    model_idx = model_index_list[i]
-                    model = [self.paligemma.language_model, self.gemma_expert.model][model_idx]
-                    out_emb, _ = model.norm(hidden_states, cond=adarms_cond[model_idx])
-                    outputs_embeds.append(out_emb)
-                return outputs_embeds
-
-            if use_gradient_checkpointing:
-                outputs_embeds = torch.utils.checkpoint.checkpoint(
-                    compute_final_norms,
-                    inputs_embeds,
-                    adarms_cond,
-                    use_reentrant=False,
-                    preserve_rng_state=False,
-                )
-            else:
-                outputs_embeds = compute_final_norms(inputs_embeds, adarms_cond)
-
-            prefix_output = outputs_embeds[0]
-            # 只返回几何+动作段中的动作输出
-            suffix_output = outputs_embeds[-1]
-            prefix_past_key_values = None
-
-        elif inputs_embeds[1] is None:
+        if inputs_embeds[1] is None:
             prefix_output = self.paligemma.language_model.forward(
                 inputs_embeds=inputs_embeds[0],
                 attention_mask=attention_mask,
@@ -542,6 +502,10 @@ class PaliGemmaWithExpertModel(
                         preserve_rng_state=False,
                         paligemma=self.paligemma,
                         gemma_expert=self.gemma_expert,
+                        geom_tokens=geom_tokens,
+                        geom_k_proj=self.geom_k_proj,
+                        geom_v_proj=self.geom_v_proj,
+                        geom_alpha=self.geom_alpha,
                     )
                 else:
                     inputs_embeds = compute_layer_complete(
@@ -552,6 +516,10 @@ class PaliGemmaWithExpertModel(
                         adarms_cond,
                         paligemma=self.paligemma,
                         gemma_expert=self.gemma_expert,
+                        geom_tokens=geom_tokens,
+                        geom_k_proj=self.geom_k_proj,
+                        geom_v_proj=self.geom_v_proj,
+                        geom_alpha=self.geom_alpha,
                     )
 
             # final norm
@@ -604,6 +572,10 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
 
         self.time_mlp_in = nn.Linear(action_expert_config.width, action_expert_config.width)
         self.time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
+        # 几何 cross-attn 投影
+        self.geom_k_proj = nn.Linear(action_expert_config.width, action_expert_config.width)
+        self.geom_v_proj = nn.Linear(action_expert_config.width, action_expert_config.width)
+        self.geom_alpha = nn.Parameter(torch.tensor(1.0))
 
         # Initialize gradient checkpointing flag
         self.gradient_checkpointing_enabled = False
@@ -778,47 +750,34 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, tokens, masks)
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(x_t, time)
 
-        # 如果提供几何段，组装三段，否则保持两段
-        inputs_embeds = [prefix_embs, suffix_embs] if extra_prefix_embs is None else [
-            prefix_embs,
-            extra_prefix_embs,
-            suffix_embs,
-        ]
-        pad_masks = (
-            torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
-            if extra_prefix_embs is None
-            else torch.cat([prefix_pad_masks, extra_pad_masks, suffix_pad_masks], dim=1)
-        )
-        att_masks = (
-            torch.cat([prefix_att_masks, suffix_att_masks], dim=1)
-            if extra_prefix_embs is None
-            else torch.cat([prefix_att_masks, extra_att_masks, suffix_att_masks], dim=1)
-        )
-
         if (
             self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype
             == torch.bfloat16
         ):
-            inputs_embeds = [emb.to(dtype=torch.bfloat16) for emb in inputs_embeds]
+            suffix_embs = suffix_embs.to(dtype=torch.bfloat16)
+            prefix_embs = prefix_embs.to(dtype=torch.bfloat16)
+
+        pad_masks = torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
+        att_masks = torch.cat([prefix_att_masks, suffix_att_masks], dim=1)
 
         att_2d_masks = make_att_2d_masks(pad_masks, att_masks)
         position_ids = torch.cumsum(pad_masks, dim=1) - 1
 
         att_2d_masks_4d = self._prepare_attention_masks_4d(att_2d_masks)
 
-        def forward_func(inputs_embeds, att_2d_masks_4d, position_ids, adarms_cond):
+        def forward_func(prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond):
             (_, suffix_out), _ = self.paligemma_with_expert.forward(
                 attention_mask=att_2d_masks_4d,
                 position_ids=position_ids,
                 past_key_values=None,
-                inputs_embeds=inputs_embeds,
+                inputs_embeds=[prefix_embs, suffix_embs],
                 use_cache=False,
                 adarms_cond=[None, adarms_cond],
             )
             return suffix_out
 
         suffix_out = self._apply_checkpoint(
-            forward_func, inputs_embeds, att_2d_masks_4d, position_ids, adarms_cond
+            forward_func, prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond
         )
 
         suffix_out = suffix_out[:, -self.config.chunk_size :]
@@ -840,9 +799,6 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         masks,
         noise=None,
         num_steps=None,
-        extra_prefix_embs: torch.Tensor | None = None,
-        extra_pad_masks: torch.Tensor | None = None,
-        extra_att_masks: torch.Tensor | None = None,
         **kwargs: Unpack[ActionSelectKwargs],
     ) -> Tensor:
         """Do a full inference forward and compute the action."""
@@ -862,23 +818,21 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
             noise = self.sample_noise(actions_shape, device)
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, tokens, masks)
+        prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
 
-        # 如果没有几何段，保留原有前缀缓存；有几何段则不使用 cache，后续全量重算
-        past_key_values = None
-        if extra_prefix_embs is None:
-            prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
-            prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
+        self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"  # noqa: SLF001
 
-            prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
-            self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"  # noqa: SLF001
-
-            _, past_key_values = self.paligemma_with_expert.forward(
-                attention_mask=prefix_att_2d_masks_4d,
-                position_ids=prefix_position_ids,
-                past_key_values=None,
-                inputs_embeds=[prefix_embs, None],
-                use_cache=True,
-            )
+        _, past_key_values = self.paligemma_with_expert.forward(
+            attention_mask=prefix_att_2d_masks_4d,
+            position_ids=prefix_position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=True,
+        )
+        geom_tokens = kwargs.get("extra_prefix_embs", None)
+        geom_tokens = geom_tokens.to(prefix_embs.dtype) if geom_tokens is not None else None
 
         dt = -1.0 / num_steps
         dt = torch.tensor(dt, dtype=torch.float32, device=device)
@@ -894,12 +848,9 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
                 return self.denoise_step(
                     prefix_pad_masks=prefix_pad_masks,
                     past_key_values=past_key_values,
-                    prefix_embs=prefix_embs if extra_prefix_embs is not None else None,
                     x_t=input_x_t,
                     timestep=current_timestep,
-                    extra_prefix_embs=extra_prefix_embs,
-                    extra_pad_masks=extra_pad_masks,
-                    extra_att_masks=extra_att_masks,
+                    geom_tokens=geom_tokens,
                 )
 
             if self._rtc_enabled():
@@ -935,52 +886,36 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         past_key_values,
         x_t,
         timestep,
-        prefix_embs=None,
-        extra_prefix_embs: torch.Tensor | None = None,
-        extra_pad_masks: torch.Tensor | None = None,
-        extra_att_masks: torch.Tensor | None = None,
+        geom_tokens=None,
     ):
         """Apply one denoising step of the noise `x_t` at a given timestep."""
         suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(x_t, timestep)
 
-        # 组装段：有 prefix_embs 时走三段；否则两段（cache 仅前缀）
-        if prefix_embs is not None:
-            segments = [prefix_embs]
-            if extra_prefix_embs is not None:
-                if extra_pad_masks is None or extra_att_masks is None:
-                    raise ValueError(
-                        "extra_pad_masks and extra_att_masks are required when extra_prefix_embs is provided"
-                    )
-                segments.append(extra_prefix_embs)
-                suffix_pad_masks = torch.cat([extra_pad_masks, suffix_pad_masks], dim=1)
-                suffix_att_masks = torch.cat([extra_att_masks, suffix_att_masks], dim=1)
-            segments.append(suffix_embs)
-            inputs_embeds = segments
-            # 三段总 pad/att
-            pad_masks = torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
-            att_masks = torch.cat([torch.zeros_like(prefix_pad_masks), suffix_att_masks], dim=1)
-        else:
-            inputs_embeds = [None, suffix_embs]
-            pad_masks = torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
-            att_masks = torch.cat([torch.zeros_like(prefix_pad_masks), suffix_att_masks], dim=1)
+        suffix_len = suffix_pad_masks.shape[1]
+        batch_size = prefix_pad_masks.shape[0]
+        prefix_len = prefix_pad_masks.shape[1]
 
-        # 注意力 mask/位置
-        att_2d_masks = make_att_2d_masks(pad_masks, att_masks)
-        position_ids = torch.cumsum(pad_masks, dim=1) - 1
-        att_2d_masks_4d = self._prepare_attention_masks_4d(att_2d_masks)
+        prefix_pad_2d_masks = prefix_pad_masks[:, None, :].expand(batch_size, suffix_len, prefix_len)
+        suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
+        full_att_2d_masks = torch.cat([prefix_pad_2d_masks, suffix_att_2d_masks], dim=2)
 
+        prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
+        position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
+
+        full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
         self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"  # noqa: SLF001
+
         outputs_embeds, _ = self.paligemma_with_expert.forward(
-            attention_mask=att_2d_masks_4d,
+            attention_mask=full_att_2d_masks_4d,
             position_ids=position_ids,
             past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
+            inputs_embeds=[None, suffix_embs],
             use_cache=False,
             adarms_cond=[None, adarms_cond],
+            geom_tokens=geom_tokens,
         )
 
-        # 取最后一段作为动作输出
-        suffix_out = outputs_embeds[-1]
+        suffix_out = outputs_embeds[1]
         suffix_out = suffix_out[:, -self.config.chunk_size :]
         suffix_out = suffix_out.to(dtype=torch.float32)
         return self.action_out_proj(suffix_out)
@@ -1307,14 +1242,7 @@ class PI05Policy(PreTrainedPolicy):
         return self._action_queue.popleft()
 
     @torch.no_grad()
-    def predict_action_chunk(
-        self,
-        batch: dict[str, Tensor],
-        extra_prefix_embs: torch.Tensor | None = None,
-        extra_pad_masks: torch.Tensor | None = None,
-        extra_att_masks: torch.Tensor | None = None,
-        **kwargs: Unpack[ActionSelectKwargs],
-    ) -> Tensor:
+    def predict_action_chunk(self, batch: dict[str, Tensor], **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
         """Predict a chunk of actions given environment observations."""
         self.eval()
 
@@ -1323,16 +1251,7 @@ class PI05Policy(PreTrainedPolicy):
         tokens, masks = batch[f"{OBS_LANGUAGE_TOKENS}"], batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
 
         # Sample actions using the model (pass through RTC kwargs, no separate state needed for PI05)
-        actions = self.model.sample_actions(
-            images,
-            img_masks,
-            tokens,
-            masks,
-            extra_prefix_embs=extra_prefix_embs,
-            extra_pad_masks=extra_pad_masks,
-            extra_att_masks=extra_att_masks,
-            **kwargs,
-        )
+        actions = self.model.sample_actions(images, img_masks, tokens, masks, **kwargs)
 
         # Unpad actions to actual action dimension
         original_action_dim = self.config.output_features[ACTION].shape[0]
@@ -1340,13 +1259,7 @@ class PI05Policy(PreTrainedPolicy):
 
         return actions
 
-    def forward(
-        self,
-        batch: dict[str, Tensor],
-        extra_prefix_embs: torch.Tensor | None = None,
-        extra_pad_masks: torch.Tensor | None = None,
-        extra_att_masks: torch.Tensor | None = None,
-    ) -> tuple[Tensor, dict]:
+    def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         """Run the batch through the model and compute the loss for training."""
 
         # Prepare inputs
@@ -1356,16 +1269,7 @@ class PI05Policy(PreTrainedPolicy):
         actions = self.prepare_action(batch)
 
         # Compute loss (no separate state needed for PI05)
-        losses = self.model.forward(
-            images,
-            img_masks,
-            tokens,
-            masks,
-            actions,
-            extra_prefix_embs=extra_prefix_embs,
-            extra_pad_masks=extra_pad_masks,
-            extra_att_masks=extra_att_masks,
-        )
+        losses = self.model.forward(images, img_masks, tokens, masks, actions)
 
         # Truncate losses to actual action dimensions
         original_action_dim = self.config.output_features[ACTION].shape[0]
