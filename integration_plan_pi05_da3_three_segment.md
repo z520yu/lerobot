@@ -1,28 +1,34 @@
-# PI0.5 三段注意力（视觉+文本 / 几何 / 动作）接入规划
+# PI0.5 三段注意力（视觉+文本 / 几何 / 动作）接入方案
 
-# PI0.5 几何注入（双 cross 方案）
+目标：在不改 VLM/动作头数的前提下，让动作通过两路 cross-attn 读取“前缀 KV（视觉+文本）”和“几何 KV”，几何不走动作 FFN/门控，先跑通再逐步补 mask 等细节。
 
-目标：不改变现有 VLM/动作头数配置，保持视觉前缀/动作自注意力不变，动作通过两路 cross-attn 分别读取视觉+文本 KV 和几何 KV，几何不走动作 FFN/门控。
+## 当前基线
+- `modeling_pi05.py`：原始两段（视觉+文本 / 动作），无几何。代码已回退为干净版本。
+- 旧参考：`modeling_pi05_before.py`、`train copy/val copy`（旧前缀版，仅作参考，未生效）。
 
-## 方案：动作自注意力 + 前缀 cross + 几何 cross
-- 前缀（视觉+文本）：保持原自注意力/FFN。
-- 动作：保持原自注意力/FFN。
-- 几何：适配器输出后，独立几何 k/v 投影（自带可学习缩放 α），仅提供 KV，不参与动作 FFN。
-- 融合：动作 query 先跨注意力读取前缀 KV，再跨注意力读取几何 KV（或并行计算后加和），再进动作 FFN/门控。
-- cache：几何 KV 可固定不变（可复用），保持原有 cache 逻辑。
+## 分步落地计划
+1) **模型侧接几何 KV**
+   - `PaliGemmaWithExpertModel` 增 `geom_k_proj/geom_v_proj/geom_alpha`：输出维 = 动作 KV 宽度（num_heads * head_dim），输入维 = 动作 width，几何仅提供 KV。
+   - `compute_layer_complete`：动作查询 q 用 action q_proj，几何 tokens 线性投影 → reshape [B, H, Lg, D]，做一轮 cross-attn，加到动作自注意力输出，再进动作 FFN。暂不加 mask/RoPE，先保证形状对齐。
+   - `forward/denoise/sample` 支持 `geom_tokens` 透传。
 
-## 当前状态
-- 代码已实现动作自注意力 + 几何 cross（geom_k/v_proj+alpha），几何不走动作 FFN。
-- 前缀保持原自注意力；动作注意力中仍包含前缀 KV，几何通过额外 cross 注入。
-- 几何 cross 目前未应用 pad/att mask，默认全有效；训练/评估管线尚未自动生成几何 token。
-- `tools/test_three_segment_pi05.py` 前向已验证通过（单张图，geom_tokens -> actions）。
+2) **几何 Adapter 设计（尽量少损）**
+   - `hidden_dim = num_heads * head_dim`（如 gemma_300m: 2048），仅压缩空间（双线性到 14×14 起步），不降通道。
+   - 保留 adapter 内 alpha（默认 0.1/1.0）控几何信号强度。
+   - Mask 先不做，后续补 pad/att mask；如需多尺度，可拼两种网格再线性映射到同宽度。
+   - 正式接入时请用动作 KV 宽度作为 hidden_dim，让几何 token 直接匹配模型侧几何投影，避免额外升降维带来的不对齐。
 
-## 下一步规划（按优先级）
-1) **接入训练/评估管线**：复用 DA3→GeomAdapter 生成 `geom_tokens`，在 forward/sample 时传入，先跑通训练（几何全有效，模型接口已支持 `geom_tokens`）。
-2) **补几何 mask/位置**：仿前缀生成几何 pad/att mask，cross-attn 时应用，必要时补 RoPE/pos 处理。
-3) **小规模验证**：小网格、小 batch 跑一次训练+推理，检查 loss/形状/显存，适当调节 geom_alpha。
-4) **优化（可选）**：如需进一步控显存或开 cache，再评估几何 KV 的缓存策略。
+3) **训练/评估管线接入**
+   - 取 `observation.images.image2` 喂 DA3（冻结），Adapter 生成 `geom_tokens`（bf16/no_grad），传 `geom_tokens` 给 policy.forward / predict_action_chunk。
+   - Adapter 参数入优化器，DA3 冻结；几何生成失败则跳过并 warning。
 
-## 注意
-- 不再强拼多段 KV，头数不需要强行一致；几何与前缀互不干扰，只通过动作查询聚合。
-- 显存相对三段自注意力更可控；几何网格仍建议从小网格起步。
+4) **验证与调试**
+   - 先关几何（USE_GEOM_PREFIX=False）跑通；开几何后用小 batch 验证，必要时打印 q/k 形状。
+   - 可用 `tools/test_three_segment_pi05.py` 做前向/采样自测。
+
+5) **后续优化（可选）**
+   - 补几何 mask/RoPE、多尺度 Adapter，或几何 KV cache 控显存。
+
+## 备注
+- 目标是不强拼多段 KV，几何与前缀互不干扰，只通过动作查询聚合。
+- 网格建议从小开始；alpha 可调小以减弱扰动。

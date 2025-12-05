@@ -58,6 +58,7 @@ from copy import deepcopy
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
+import os
 from pprint import pformat
 from typing import Any, TypedDict
 
@@ -91,18 +92,88 @@ from lerobot.utils.utils import (
     init_logging,
     inside_slurm,
 )
-
 from depth_anything_3.api import DepthAnything3
 
-# Geometry settings（仅 Pi0.5 使用；已接入几何 KV，可按需开启）
+# Geometry prefix settings (eval); only applies to Pi0.5
 USE_GEOM_PREFIX = True
 GEOM_MODEL_ID = "depth-anything/DA3-LARGE"
 GEOM_TARGET_HW = (14, 14)
-GEOM_INIT_ALPHA = 1.0
+GEOM_INIT_ALPHA = 0.1
 FREEZE_GEOM_MODEL = True
-GEOM_IMAGE_KEY = "observation.images.image2"
+GEOM_IMAGE_KEY = "observation.images.image2"  # 固定 image2 作为几何前缀来源
 
-logger = logging.getLogger(__name__)
+
+def _build_geom_prefix(
+    batch: dict[str, Tensor],
+    policy: PreTrainedPolicy,
+    geom_model: DepthAnything3 | None,
+    geom_adapter: GeometryTokenAdapter | None,
+) -> dict | None:
+    """Construct geometry prefix kwargs using DA3 ray features."""
+    if not (USE_GEOM_PREFIX and geom_model is not None and geom_adapter is not None):
+        return None
+
+    # pick image keys
+    if GEOM_IMAGE_KEY is not None:
+        geom_keys = [GEOM_IMAGE_KEY] if isinstance(GEOM_IMAGE_KEY, str) else list(GEOM_IMAGE_KEY)
+    else:
+        geom_keys = [k for k in getattr(policy.config, "image_features", {}).keys() if k in batch]
+    geom_keys = [k for k in geom_keys if k in batch]
+    if not geom_keys:
+        raise RuntimeError(f"No suitable image key found in batch for geometry prefix (GEOM_IMAGE_KEY={GEOM_IMAGE_KEY}).")
+
+    geom_tokens_list: list[Tensor] = []
+    geom_pads: list[Tensor] = []
+    geom_atts: list[Tensor] = []
+
+    for img_key in geom_keys:
+        img_tensor = batch[img_key]  # [B, C, H, W] on policy device
+        imgs_cpu = img_tensor.detach().cpu()
+        imgs_list = []
+        for i in range(imgs_cpu.shape[0]):
+            img_np = imgs_cpu[i].permute(1, 2, 0).float()
+            if img_np.min() < 0:
+                img_np = (img_np + 1) * 0.5
+            img_np = (img_np.clamp(0, 1) * 255).to(torch.uint8).numpy()
+            imgs_list.append(img_np)
+
+        imgs_da3_cpu, extr_da3, intr_da3 = geom_model._preprocess_inputs(imgs_list)
+        imgs_da3, ex_t_da3, in_t_da3 = geom_model._prepare_model_inputs(imgs_da3_cpu, extr_da3, intr_da3)
+
+        with torch.no_grad():
+            # 混合精度跑 DA3 分支，降低显存
+            with torch.autocast(device_type=geom_model.device.type, dtype=torch.bfloat16):
+                feats, _ = geom_model.model.backbone(imgs_da3, cam_token=None, export_feat_layers=[])
+                H_da3, W_da3 = imgs_da3.shape[-2], imgs_da3.shape[-1]
+                head_out = geom_model.model.head(feats, H_da3, W_da3, patch_start_idx=0)
+                ray = head_out.get("ray", None)
+        if ray is None:
+            raise RuntimeError(f"ray not found in geometry head output for key {img_key}.")
+        if ray.dim() == 5:
+            if ray.shape[0] == 1 and ray.shape[1] == img_tensor.shape[0]:
+                ray_t = ray.transpose(0, 1).contiguous()  # [B,1,C,H,W]
+            else:
+                ray_t = ray
+        elif ray.dim() == 4:
+            ray_t = ray.unsqueeze(1)
+        else:
+            raise RuntimeError(f"Unexpected ray shape {ray.shape} for key {img_key}")
+
+        tokens, pad, att = geom_adapter(ray_t)
+        geom_tokens_list.append(tokens)
+        geom_pads.append(pad)
+        geom_atts.append(att)
+
+    geom_tokens = torch.cat(geom_tokens_list, dim=1)
+    geom_pad = torch.cat(geom_pads, dim=1)
+    geom_att = torch.cat(geom_atts, dim=1)
+
+    return {
+        "extra_prefix_embs": geom_tokens,
+        "extra_pad_masks": geom_pad,
+        "extra_att_masks": geom_att,
+    }
+from depth_anything_3.api import DepthAnything3
 
 
 def rollout(
@@ -112,7 +183,7 @@ def rollout(
     env_postprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction],
-    geom_model=None,
+    geom_model: DepthAnything3 | None = None,
     geom_adapter: GeometryTokenAdapter | None = None,
     seeds: list[int] | None = None,
     return_observations: bool = False,
@@ -189,53 +260,20 @@ def rollout(
 
         observation = preprocessor(observation)
 
-        geom_tokens = None
-        if USE_GEOM_PREFIX and geom_model is not None and geom_adapter is not None and getattr(policy.config, "type", None) == "pi05":
+        extra_prefix_kwargs = None
+        if USE_GEOM_PREFIX and geom_model is not None and geom_adapter is not None:
             try:
-                if GEOM_IMAGE_KEY is not None and GEOM_IMAGE_KEY in observation:
-                    img_key = GEOM_IMAGE_KEY
-                else:
-                    img_candidates = [k for k in observation.keys() if "images" in k]
-                    img_key = img_candidates[0] if img_candidates else None
-                if img_key is None:
-                    raise RuntimeError("No image key found for geometry prefix")
-                img_tensor = observation[img_key]  # [B,C,H,W]
-                imgs_cpu = img_tensor.detach().cpu()
-                imgs_list = []
-                for i in range(imgs_cpu.shape[0]):
-                    img_np = imgs_cpu[i].permute(1, 2, 0).float()
-                    if img_np.min() < 0:
-                        img_np = (img_np + 1) * 0.5
-                    img_np = (img_np.clamp(0, 1) * 255).to(torch.uint8).numpy()
-                    imgs_list.append(img_np)
-                with torch.no_grad(), torch.autocast(device_type=policy.device.type, dtype=torch.bfloat16):
-                    imgs_da3_cpu, extr_da3, intr_da3 = geom_model._preprocess_inputs(imgs_list)
-                    imgs_da3, ex_t_da3, in_t_da3 = geom_model._prepare_model_inputs(
-                        imgs_da3_cpu, extr_da3, intr_da3
-                    )
-                    feats, _ = geom_model.model.backbone(imgs_da3, cam_token=None, export_feat_layers=[])
-                    H_da3, W_da3 = imgs_da3.shape[-2], imgs_da3.shape[-1]
-                    head_out = geom_model.model.head(feats, H_da3, W_da3, patch_start_idx=0)
-                    ray = head_out.get("ray", None)
-                    if ray is not None and ray.dim() == 4:
-                        ray = ray.unsqueeze(1)
-                    if ray is None:
-                        raise RuntimeError("ray not found in geometry head output")
-                    # 调整维度 [1,B,H,W,C] -> [B,1,H,W,C]
-                    if ray.shape[-1] == 6:
-                        pass
-                    elif ray.shape[2] == 6:
-                        ray = ray.permute(0, 1, 3, 4, 2)
-                    else:
-                        raise RuntimeError(f"Unexpected ray shape {ray.shape}")
-                    ray = ray.permute(1, 0, 2, 3, 4).contiguous()
-                    geom_tokens, _, _ = geom_adapter(ray.to(policy.device))
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"Geometry prefix skipped (eval) due to error: {e}")
-                geom_tokens = None
+                extra_prefix_kwargs = _build_geom_prefix(observation, policy, geom_model, geom_adapter)
+            except Exception as e:
+                logging.warning(f"Geometry prefix skipped in eval due to error: {e}")
+                extra_prefix_kwargs = None
 
         with torch.inference_mode():
-            action = policy.select_action(observation, geom_tokens=geom_tokens)
+            if extra_prefix_kwargs and hasattr(policy, "predict_action_chunk"):
+                action_chunk = policy.predict_action_chunk(observation, **extra_prefix_kwargs)
+                action = action_chunk[:, 0]
+            else:
+                action = policy.select_action(observation)
         action = postprocessor(action)
 
         action_transition = {"action": action}
@@ -315,13 +353,13 @@ def eval_policy(
     env_postprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction],
+    geom_model: DepthAnything3 | None,
+    geom_adapter: GeometryTokenAdapter | None,
     n_episodes: int,
     max_episodes_rendered: int = 0,
     videos_dir: Path | None = None,
     return_episode_data: bool = False,
     start_seed: int | None = None,
-    geom_model=None,
-    geom_adapter: GeometryTokenAdapter | None = None,
 ) -> dict:
     """
     Args:
@@ -586,7 +624,7 @@ def eval_main(cfg: EvalPipelineConfig):
 
     policy.eval()
 
-    # Geometry model + adapter（仅 Pi0.5）
+    # Geometry model + adapter for Pi0.5
     geom_model = None
     geom_adapter = None
     if USE_GEOM_PREFIX and getattr(policy.config, "type", None) == "pi05":
@@ -596,10 +634,7 @@ def eval_main(cfg: EvalPipelineConfig):
             for p in geom_model.parameters():
                 p.requires_grad = False
         geom_model.eval()
-        # 使用动作专家配置对齐宽度
-        cfg_expert = get_gemma_config(policy.config.action_expert_variant)
-        # Adapter 输出对齐动作宽度（in_features），再由 geom_k_proj 映射到 H*D
-        hidden_dim = cfg_expert.width
+        hidden_dim = get_gemma_config(policy.config.paligemma_variant).width
         geom_adapter = GeometryTokenAdapter(
             geom_dim=6,
             target_hw=GEOM_TARGET_HW,
@@ -622,6 +657,9 @@ def eval_main(cfg: EvalPipelineConfig):
     # Create environment-specific preprocessor and postprocessor (e.g., for LIBERO environments)
     env_preprocessor, env_postprocessor = make_env_pre_post_processors(env_cfg=cfg.env)
 
+    # 视频目录可单独指定本地路径以避免 NAS/gvfs 限制
+    videos_base = Path(os.environ.get("EVAL_VIDEOS_DIR", cfg.output_dir / "videos"))
+
     with torch.no_grad(), torch.autocast(device_type=device.type) if cfg.policy.use_amp else nullcontext():
         info = eval_policy_all(
             envs=envs,
@@ -630,13 +668,13 @@ def eval_main(cfg: EvalPipelineConfig):
             env_postprocessor=env_postprocessor,
             preprocessor=preprocessor,
             postprocessor=postprocessor,
-            n_episodes=cfg.eval.n_episodes,
-            max_episodes_rendered=10,
-            videos_dir=Path(cfg.output_dir) / "videos",
-            start_seed=cfg.seed,
-            max_parallel_tasks=cfg.env.max_parallel_tasks,
             geom_model=geom_model,
             geom_adapter=geom_adapter,
+            n_episodes=cfg.eval.n_episodes,
+            max_episodes_rendered=10,
+            videos_dir=videos_base,
+            start_seed=cfg.seed,
+            max_parallel_tasks=cfg.env.max_parallel_tasks,
         )
         print("Overall Aggregated Metrics:")
         print(info["overall"])
@@ -674,13 +712,13 @@ def eval_one(
     env_postprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction],
+    geom_model: DepthAnything3 | None,
+    geom_adapter: GeometryTokenAdapter | None,
     n_episodes: int,
     max_episodes_rendered: int,
     videos_dir: Path | None,
     return_episode_data: bool,
     start_seed: int | None,
-    geom_model=None,
-    geom_adapter: GeometryTokenAdapter | None = None,
 ) -> TaskMetrics:
     """Evaluates one task_id of one suite using the provided vec env."""
 
@@ -693,13 +731,13 @@ def eval_one(
         env_postprocessor=env_postprocessor,
         preprocessor=preprocessor,
         postprocessor=postprocessor,
+        geom_model=geom_model,
+        geom_adapter=geom_adapter,
         n_episodes=n_episodes,
         max_episodes_rendered=max_episodes_rendered,
         videos_dir=task_videos_dir,
         return_episode_data=return_episode_data,
         start_seed=start_seed,
-        geom_model=geom_model,
-        geom_adapter=geom_adapter,
     )
 
     per_episode = task_result["per_episode"]
@@ -721,13 +759,13 @@ def run_one(
     env_postprocessor,
     preprocessor,
     postprocessor,
+    geom_model,
+    geom_adapter,
     n_episodes: int,
     max_episodes_rendered: int,
     videos_dir: Path | None,
     return_episode_data: bool,
     start_seed: int | None,
-    geom_model=None,
-    geom_adapter: GeometryTokenAdapter | None = None,
 ):
     """
     Run eval_one for a single (task_group, task_id, env).
@@ -747,13 +785,13 @@ def run_one(
         env_postprocessor=env_postprocessor,
         preprocessor=preprocessor,
         postprocessor=postprocessor,
+        geom_model=geom_model,
+        geom_adapter=geom_adapter,
         n_episodes=n_episodes,
         max_episodes_rendered=max_episodes_rendered,
         videos_dir=task_videos_dir,
         return_episode_data=return_episode_data,
         start_seed=start_seed,
-        geom_model=geom_model,
-        geom_adapter=geom_adapter,
     )
     # ensure we always provide video_paths key to simplify accumulation
     if max_episodes_rendered > 0:
@@ -768,6 +806,8 @@ def eval_policy_all(
     env_postprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction],
+    geom_model: DepthAnything3 | None,
+    geom_adapter: GeometryTokenAdapter | None,
     n_episodes: int,
     *,
     max_episodes_rendered: int = 0,
@@ -775,8 +815,6 @@ def eval_policy_all(
     return_episode_data: bool = False,
     start_seed: int | None = None,
     max_parallel_tasks: int = 1,
-    geom_model=None,
-    geom_adapter: GeometryTokenAdapter | None = None,
 ) -> dict:
     """
     Evaluate a nested `envs` dict: {task_group: {task_id: vec_env}}.
@@ -827,13 +865,13 @@ def eval_policy_all(
         env_postprocessor=env_postprocessor,
         preprocessor=preprocessor,
         postprocessor=postprocessor,
+        geom_model=geom_model,
+        geom_adapter=geom_adapter,
         n_episodes=n_episodes,
         max_episodes_rendered=max_episodes_rendered,
         videos_dir=videos_dir,
         return_episode_data=return_episode_data,
         start_seed=start_seed,
-        geom_model=geom_model,
-        geom_adapter=geom_adapter,
     )
 
     if max_parallel_tasks <= 1:

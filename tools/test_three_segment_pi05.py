@@ -72,8 +72,9 @@ def main():
 
     cfg = PI05Config()
     cfg.device = device
-    # 几何段将走动作专家（gemma_expert）通道，hidden_dim 对齐 action_expert 宽度
-    hidden_dim = get_gemma_config(cfg.action_expert_variant).width
+    # 几何段将走动作专家（gemma_expert）通道，hidden_dim 对齐动作宽度 (in_features)
+    gcfg = get_gemma_config(cfg.action_expert_variant)
+    hidden_dim = gcfg.width
     adapter = GeometryTokenAdapter(
         geom_dim=ray.shape[-1], target_hw=tuple(args.geom_hw), hidden_dim=hidden_dim
     ).to(device)
@@ -97,9 +98,7 @@ def main():
             img_masks,
             tokens,
             masks,
-            extra_prefix_embs=geom_tokens,
-            extra_pad_masks=geom_pad,
-            extra_att_masks=geom_att,
+            geom_tokens=geom_tokens,
             num_steps=2,
         )
     print(f"actions shape: {tuple(actions.shape)}")

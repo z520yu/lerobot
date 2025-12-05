@@ -20,6 +20,8 @@ from pprint import pformat
 from typing import Any
 
 import torch
+from pathlib import Path
+import os
 from accelerate import Accelerator
 from termcolor import colored
 from torch.optim import Optimizer
@@ -34,10 +36,16 @@ from lerobot.envs.utils import close_envs
 from lerobot.optim.factory import make_optimizer_and_scheduler
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pretrained import PreTrainedPolicy
-from lerobot.policies.pi05.geom_adapter import GeometryTokenAdapter
 from lerobot.policies.pi05.modeling_pi05 import get_gemma_config
+from lerobot.policies.pi05.geom_adapter import GeometryTokenAdapter
 from lerobot.rl.wandb_utils import WandBLogger
-from lerobot.scripts.lerobot_eval import eval_policy_all
+from depth_anything_3.api import DepthAnything3
+from importlib.machinery import SourceFileLoader
+# 动态加载定制 eval（支持几何前缀、本地视频配置）
+_eval_loader = SourceFileLoader(
+    "lerobot_eval_copy", str(Path(__file__).resolve().parent / "lerobot_eval copy.py")
+)
+eval_policy_all = _eval_loader.load_module().eval_policy_all
 from lerobot.utils.logging_utils import AverageMeter, MetricsTracker
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.train_utils import (
@@ -52,15 +60,14 @@ from lerobot.utils.utils import (
     has_method,
     init_logging,
 )
-from depth_anything_3.api import DepthAnything3
 
-# Geometry settings（仅 Pi0.5 使用；已接入几何 KV，可按需开启）
-USE_GEOM_PREFIX = True
+# Geometry prefix settings (only for Pi0.5; set USE_GEOM_PREFIX=False to disable)
+USE_GEOM_PREFIX = True  # 默认开启，如不需几何前缀请改为 False
 GEOM_MODEL_ID = "depth-anything/DA3-LARGE"
 GEOM_TARGET_HW = (14, 14)
-GEOM_INIT_ALPHA = 1.0
+GEOM_INIT_ALPHA = 0.1
 FREEZE_GEOM_MODEL = True
-GEOM_IMAGE_KEY = "observation.images.image2"
+GEOM_IMAGE_KEY = "observation.images.image2"  # 固定使用 image2 作为几何前缀，减少多路图像显存
 
 
 def update_policy(
@@ -166,6 +173,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         accelerator = Accelerator(step_scheduler_with_optimizer=False, kwargs_handlers=[ddp_kwargs])
 
     init_logging(accelerator=accelerator)
+    # Silence verbose DA3 preprocessing logs
+    logging.getLogger("depth_anything_3").setLevel(logging.ERROR)
+    logging.getLogger("depth_anything_3.utils.io.input_processor").setLevel(logging.ERROR)
 
     # Determine if this is the main process (for logging and checkpointing)
     # When using accelerate, only the main process should log to avoid duplicate outputs
@@ -222,7 +232,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # Wait for all processes to finish policy creation before continuing
     accelerator.wait_for_everyone()
 
-    # Geometry model + adapter（仅 Pi0.5 使用）
+    # Optional: geometry model + adapter (only for Pi0.5 when enabled)
     geom_model = None
     geom_adapter = None
     if USE_GEOM_PREFIX and getattr(policy.config, "type", None) == "pi05":
@@ -233,10 +243,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             for p in geom_model.parameters():
                 p.requires_grad = False
         geom_model.eval()
-        # 使用动作专家配置对齐宽度
-        cfg_expert = get_gemma_config(policy.config.action_expert_variant)
-        # Adapter 输出对齐动作宽度（in_features），再由 geom_k_proj 映射到 H*D
-        hidden_dim = cfg_expert.width
+        hidden_dim = get_gemma_config(policy.config.paligemma_variant).width
         geom_adapter = GeometryTokenAdapter(
             geom_dim=6,  # ray 通道
             target_hw=GEOM_TARGET_HW,
@@ -280,8 +287,10 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
     if is_main_process:
         logging.info("Creating optimizer and scheduler")
+    # 如果训练几何适配器，将其参数加入优化器
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
     if geom_adapter is not None:
+        # 将适配器参数加入同一个 param_group
         geom_params = [p for p in geom_adapter.parameters() if p.requires_grad]
         optimizer.param_groups[0]["params"] = list(optimizer.param_groups[0]["params"]) + geom_params
 
@@ -337,8 +346,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     accelerator.wait_for_everyone()
     to_prepare = [policy, optimizer, dataloader, lr_scheduler]
     if geom_adapter is not None:
-        to_prepare.insert(1, geom_adapter)
+        to_prepare.insert(1, geom_adapter)  # keep optimizer after models
     prepared = accelerator.prepare(*to_prepare)
+    # unpack
     if geom_adapter is not None:
         policy, geom_adapter, optimizer, dataloader, lr_scheduler = prepared
     else:
@@ -378,48 +388,72 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         extra_forward_kwargs: dict | None = None
         if USE_GEOM_PREFIX and geom_model is not None and geom_adapter is not None:
             try:
-                # 选择几何图像键
-                if GEOM_IMAGE_KEY is not None and GEOM_IMAGE_KEY in batch:
-                    geom_keys = [GEOM_IMAGE_KEY]
+                # 选择图像键：优先配置 GEOM_IMAGE_KEY，否则在 batch 中寻找所有存在的 image_feature 键
+                if GEOM_IMAGE_KEY is not None:
+                    geom_keys = [GEOM_IMAGE_KEY] if isinstance(GEOM_IMAGE_KEY, str) else list(GEOM_IMAGE_KEY)
                 else:
-                    geom_keys = [k for k in batch.keys() if "images" in k]
+                    geom_keys = [k for k in policy.config.image_features.keys() if k in batch]
+                geom_keys = [k for k in geom_keys if k in batch]
                 if not geom_keys:
-                    raise RuntimeError("No image key found for geometry prefix")
-                img_tensor = batch[geom_keys[0]]  # [B, C, H, W]
-                imgs_cpu = img_tensor.detach().cpu()
-                imgs_list = []
-                for i in range(imgs_cpu.shape[0]):
-                    img_np = imgs_cpu[i].permute(1, 2, 0).float()
-                    if img_np.min() < 0:
-                        img_np = (img_np + 1) * 0.5
-                    img_np = (img_np.clamp(0, 1) * 255).to(torch.uint8).numpy()
-                    imgs_list.append(img_np)
-                with torch.no_grad(), torch.autocast(device_type=device.type, dtype=torch.bfloat16):
-                    # 批量跑 DA3，一次性得到 B 张图的 ray
+                    raise RuntimeError(f"No suitable image key found in batch for geometry prefix (GEOM_IMAGE_KEY={GEOM_IMAGE_KEY}).")
+
+                # 多路几何：分别处理并拼接
+                geom_tokens_list = []
+                geom_pads = []
+                geom_atts = []
+
+                for img_key in geom_keys:
+                    img_tensor = batch[img_key]  # [B, C, H, W]
+                    imgs_cpu = img_tensor.detach().cpu()
+                    imgs_list = []
+                    for i in range(imgs_cpu.shape[0]):
+                        img_np = imgs_cpu[i].permute(1, 2, 0).float()
+                        if img_np.min() < 0:  # 归一化到 [0,1]
+                            img_np = (img_np + 1) * 0.5
+                        img_np = (img_np.clamp(0, 1) * 255).to(torch.uint8).numpy()
+                        imgs_list.append(img_np)
                     imgs_da3_cpu, extr_da3, intr_da3 = geom_model._preprocess_inputs(imgs_list)
                     imgs_da3, ex_t_da3, in_t_da3 = geom_model._prepare_model_inputs(
                         imgs_da3_cpu, extr_da3, intr_da3
                     )
-                    feats, _ = geom_model.model.backbone(imgs_da3, cam_token=None, export_feat_layers=[])
-                    H_da3, W_da3 = imgs_da3.shape[-2], imgs_da3.shape[-1]
-                    head_out = geom_model.model.head(feats, H_da3, W_da3, patch_start_idx=0)
-                    ray = head_out.get("ray", None)
+
+                    with torch.no_grad():
+                        # 混合精度跑 DA3 分支，降低显存
+                        with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
+                            feats, _ = geom_model.model.backbone(imgs_da3, cam_token=None, export_feat_layers=[])
+                            H_da3, W_da3 = imgs_da3.shape[-2], imgs_da3.shape[-1]
+                            head_out = geom_model.model.head(feats, H_da3, W_da3, patch_start_idx=0)
+                            ray = head_out.get("ray", None)
                     if ray is None:
-                        raise RuntimeError("ray not found in geometry head output")
-                    if ray.dim() == 4:
-                        ray = ray.unsqueeze(1)
-                    if ray.shape[-1] == 6:
-                        pass  # [B,S,H,W,C]
-                    elif ray.shape[2] == 6:
-                        ray = ray.permute(0, 1, 3, 4, 2)
+                        raise RuntimeError(f"ray not found in geometry head output for key {img_key}.")
+                    if ray.dim() == 5:
+                        # DA3 outputs [B_da3, S, C, H, W]; when B_da3=1 and S=batch_size, transpose to match policy batch
+                        if ray.shape[0] == 1 and ray.shape[1] == img_tensor.shape[0]:
+                            ray_t = ray.transpose(0, 1).contiguous()  # -> [B, 1, C, H, W]
+                        else:
+                            ray_t = ray
+                    elif ray.dim() == 4:
+                        ray_t = ray.unsqueeze(1)
                     else:
-                        raise RuntimeError(f"Unexpected ray shape {ray.shape}")
-                    # ray: [1,B,H,W,C] -> [B,1,H,W,C]
-                    ray = ray.permute(1, 0, 2, 3, 4).contiguous()
-                    geom_tokens, _, _ = geom_adapter(ray.to(device))
-                geom_tokens = geom_tokens
-                extra_forward_kwargs = {"geom_tokens": geom_tokens}
-            except Exception as e:  # noqa: BLE001
+                        raise RuntimeError(f"Unexpected ray shape {ray.shape} for key {img_key}")
+
+                    # 几何分支全链路 bfloat16，避免 dtype 来回转换
+                    ray_t = ray_t.to(dtype=geom_adapter.alpha.dtype)
+                    tokens, pad, att = geom_adapter(ray_t)
+                    geom_tokens_list.append(tokens)
+                    geom_pads.append(pad)
+                    geom_atts.append(att)
+
+                geom_tokens = torch.cat(geom_tokens_list, dim=1)
+                geom_pad = torch.cat(geom_pads, dim=1)
+                geom_att = torch.cat(geom_atts, dim=1)
+
+                extra_forward_kwargs = {
+                    "extra_prefix_embs": geom_tokens,
+                    "extra_pad_masks": geom_pad,
+                    "extra_att_masks": geom_att,
+                }
+            except Exception as e:
                 if is_main_process:
                     logging.warning(f"Geometry prefix skipped due to error: {e}")
 
@@ -465,7 +499,10 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                     preprocessor=preprocessor,
                     postprocessor=postprocessor,
                 )
-                update_last_checkpoint(checkpoint_dir)
+                try:
+                    update_last_checkpoint(checkpoint_dir)
+                except OSError as e:
+                    logging.warning(f"Skipping last checkpoint symlink (filesystem may not support it): {e}")
                 if wandb_logger:
                     wandb_logger.log_policy(checkpoint_dir)
 
@@ -476,6 +513,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                 step_id = get_step_identifier(step, cfg.steps)
                 logging.info(f"Eval policy at step {step}")
                 with torch.no_grad(), accelerator.autocast():
+                    videos_root = Path(os.environ.get("TRAIN_EVAL_VIDEOS_DIR", cfg.output_dir / "eval"))
+                    videos_dir = videos_root / f"videos_step_{step_id}"
                     eval_info = eval_policy_all(
                         envs=eval_env,  # dict[suite][task_id] -> vec_env
                         policy=accelerator.unwrap_model(policy),
@@ -483,8 +522,10 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                         env_postprocessor=env_postprocessor,
                         preprocessor=preprocessor,
                         postprocessor=postprocessor,
+                        geom_model=geom_model,
+                        geom_adapter=geom_adapter,
                         n_episodes=cfg.eval.n_episodes,
-                        videos_dir=cfg.output_dir / "eval" / f"videos_step_{step_id}",
+                        videos_dir=videos_dir,
                         max_episodes_rendered=4,
                         start_seed=cfg.seed,
                         max_parallel_tasks=cfg.env.max_parallel_tasks,
