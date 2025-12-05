@@ -11,19 +11,17 @@
 - 融合：动作 query 先跨注意力读取前缀 KV，再跨注意力读取几何 KV（或并行计算后加和），再进动作 FFN/门控。
 - cache：几何 KV 可固定不变（可复用），保持原有 cache 逻辑。
 
-## 实施步骤（按序执行）
-1) **新增几何 KV 模块**
-   - 在动作侧注册 `geom_k_proj/geom_v_proj/geom_alpha`，输入为几何 token（对齐到动作或几何自定宽度），仅输出 k/v。
-2) **动作层改为双 cross**
-   - 保留动作自注意力不变。
-   - 在动作 forward 中增加两路 cross-attn：动作 q -> 前缀 kv（已有逻辑）；动作 q -> 几何 kv（新逻辑，几何不进 FFN）。
-   - 融合方式：两路 cross 输出相加或 concat+线性，再进动作 FFN。
-3) **接口与 mask**
-   - `PI05Pytorch.forward/sample_actions` 接收几何段，生成几何 pad/att/pos；几何不参与自注意力，只作为 cross-attn KV。
-   - cache：保留原 cache，对几何 KV 可单独缓存或每步复用。
-4) **测试验证**
-   - 更新 `tools/test_three_segment_pi05.py` 调用双 cross 路径，检查前向/采样无报错、动作形状正常。
-   - 小网格验证显存与收敛，必要时调低 α。
+## 当前状态
+- 代码已实现动作自注意力 + 几何 cross（geom_k/v_proj+alpha），几何不走动作 FFN。
+- 前缀保持原自注意力；动作注意力中仍包含前缀 KV，几何通过额外 cross 注入。
+- 几何 cross 目前未应用 pad/att mask，默认全有效；训练/评估管线尚未自动生成几何 token。
+- `tools/test_three_segment_pi05.py` 前向已验证通过（单张图，geom_tokens -> actions）。
+
+## 下一步规划（按优先级）
+1) **接入训练/评估管线**：复用 DA3→GeomAdapter 生成 `geom_tokens`，在 forward/sample 时传入，先跑通训练（几何全有效，模型接口已支持 `geom_tokens`）。
+2) **补几何 mask/位置**：仿前缀生成几何 pad/att mask，cross-attn 时应用，必要时补 RoPE/pos 处理。
+3) **小规模验证**：小网格、小 batch 跑一次训练+推理，检查 loss/形状/显存，适当调节 geom_alpha。
+4) **优化（可选）**：如需进一步控显存或开 cache，再评估几何 KV 的缓存策略。
 
 ## 注意
 - 不再强拼多段 KV，头数不需要强行一致；几何与前缀互不干扰，只通过动作查询聚合。
