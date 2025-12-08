@@ -20,6 +20,7 @@ from pprint import pformat
 from typing import Any
 
 import torch
+import torch.nn as nn
 from accelerate import Accelerator
 from termcolor import colored
 from torch.optim import Optimizer
@@ -73,6 +74,8 @@ def update_policy(
     lr_scheduler=None,
     lock=None,
     extra_forward_kwargs: dict | None = None,
+    log_geom_grads: bool = False,
+    geom_adapter: nn.Module | None = None,
 ) -> tuple[MetricsTracker, dict]:
     """
     Performs a single training step to update the policy's weights.
@@ -106,6 +109,35 @@ def update_policy(
 
     # Use accelerator's backward method
     accelerator.backward(loss)
+
+    if log_geom_grads and accelerator.is_main_process:
+        # 仅在主进程、指定步数打印几何分支梯度，便于确认 k/v 和 adapter 是否更新
+        def _log_grads(named_params, prefix: str):
+            for name, param in named_params:
+                if not (
+                    "geom_k_proj" in name
+                    or "geom_v_proj" in name
+                    or "geom_alpha" in name
+                    or name == "alpha"  # adapter 缩放
+                    or "proj" in name and "geom" in prefix  # adapter proj
+                ):
+                    continue
+                grad = param.grad
+                if grad is None:
+                    logging.info("[geom-grad] %s%s grad=None", prefix, name)
+                else:
+                    logging.info(
+                        "[geom-grad] %s%s norm=%.4e abs_mean=%.4e",
+                        prefix,
+                        name,
+                        grad.norm().item(),
+                        grad.abs().mean().item(),
+                    )
+
+        unwrapped_policy = accelerator.unwrap_model(policy, keep_fp32_wrapper=True)
+        _log_grads(unwrapped_policy.named_parameters(), prefix="policy.")
+        if geom_adapter is not None:
+            _log_grads(geom_adapter.named_parameters(), prefix="adapter.")
 
     # Clip gradients if specified
     if grad_clip_norm > 0:
@@ -378,6 +410,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         extra_forward_kwargs: dict | None = None
         if USE_GEOM_PREFIX and geom_model is not None and geom_adapter is not None:
             try:
+                log_first_geom = is_main_process and step == 0
                 # 选择几何图像键
                 if GEOM_IMAGE_KEY is not None and GEOM_IMAGE_KEY in batch:
                     geom_keys = [GEOM_IMAGE_KEY]
@@ -394,6 +427,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                         img_np = (img_np + 1) * 0.5
                     img_np = (img_np.clamp(0, 1) * 255).to(torch.uint8).numpy()
                     imgs_list.append(img_np)
+                # 几何模型不需要梯度，保持 no_grad
                 with torch.no_grad(), torch.autocast(device_type=device.type, dtype=torch.bfloat16):
                     # 批量跑 DA3，一次性得到 B 张图的 ray
                     imgs_da3_cpu, extr_da3, intr_da3 = geom_model._preprocess_inputs(imgs_list)
@@ -416,12 +450,30 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                         raise RuntimeError(f"Unexpected ray shape {ray.shape}")
                     # ray: [1,B,H,W,C] -> [B,1,H,W,C]
                     ray = ray.permute(1, 0, 2, 3, 4).contiguous()
+                if log_first_geom:
+                    logging.info(
+                        "[geom] key=%s ray_shape=%s dtype=%s device=%s",
+                        geom_keys[0],
+                        tuple(ray.shape),
+                        ray.dtype,
+                        ray.device,
+                    )
+                # adapter 需要参与梯度，放在 no_grad 外
+                with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
                     geom_tokens, _, _ = geom_adapter(ray.to(device))
-                geom_tokens = geom_tokens
+                if log_first_geom:
+                    logging.info(
+                        "[geom] tokens_shape=%s dtype=%s requires_grad=%s",
+                        tuple(geom_tokens.shape),
+                        geom_tokens.dtype,
+                        geom_tokens.requires_grad,
+                    )
                 extra_forward_kwargs = {"geom_tokens": geom_tokens}
             except Exception as e:  # noqa: BLE001
                 if is_main_process:
                     logging.warning(f"Geometry prefix skipped due to error: {e}")
+
+        log_geom_grads = is_main_process and step < 3  # 仅前几步打印梯度，避免刷屏
 
         train_tracker, output_dict = update_policy(
             train_tracker,
@@ -432,6 +484,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             accelerator=accelerator,
             lr_scheduler=lr_scheduler,
             extra_forward_kwargs=extra_forward_kwargs,
+            log_geom_grads=log_geom_grads,
+            geom_adapter=geom_adapter if geom_adapter is not None else None,
         )
 
         # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we

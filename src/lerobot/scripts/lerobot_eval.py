@@ -162,6 +162,7 @@ def rollout(
     all_rewards = []
     all_successes = []
     all_dones = []
+    last_geom_tokens = None  # 缓存上一块动作对应的几何 token，避免每帧重复跑 DA3
 
     step = 0
     # Keep track of which environments are done.
@@ -191,45 +192,51 @@ def rollout(
 
         geom_tokens = None
         if USE_GEOM_PREFIX and geom_model is not None and geom_adapter is not None and getattr(policy.config, "type", None) == "pi05":
+            reuse_cached_geom = hasattr(policy, "_action_queue") and len(getattr(policy, "_action_queue")) > 0
             try:
-                if GEOM_IMAGE_KEY is not None and GEOM_IMAGE_KEY in observation:
-                    img_key = GEOM_IMAGE_KEY
+                if reuse_cached_geom and last_geom_tokens is not None:
+                    geom_tokens = last_geom_tokens
                 else:
-                    img_candidates = [k for k in observation.keys() if "images" in k]
-                    img_key = img_candidates[0] if img_candidates else None
-                if img_key is None:
-                    raise RuntimeError("No image key found for geometry prefix")
-                img_tensor = observation[img_key]  # [B,C,H,W]
-                imgs_cpu = img_tensor.detach().cpu()
-                imgs_list = []
-                for i in range(imgs_cpu.shape[0]):
-                    img_np = imgs_cpu[i].permute(1, 2, 0).float()
-                    if img_np.min() < 0:
-                        img_np = (img_np + 1) * 0.5
-                    img_np = (img_np.clamp(0, 1) * 255).to(torch.uint8).numpy()
-                    imgs_list.append(img_np)
-                with torch.no_grad(), torch.autocast(device_type=policy.device.type, dtype=torch.bfloat16):
-                    imgs_da3_cpu, extr_da3, intr_da3 = geom_model._preprocess_inputs(imgs_list)
-                    imgs_da3, ex_t_da3, in_t_da3 = geom_model._prepare_model_inputs(
-                        imgs_da3_cpu, extr_da3, intr_da3
-                    )
-                    feats, _ = geom_model.model.backbone(imgs_da3, cam_token=None, export_feat_layers=[])
-                    H_da3, W_da3 = imgs_da3.shape[-2], imgs_da3.shape[-1]
-                    head_out = geom_model.model.head(feats, H_da3, W_da3, patch_start_idx=0)
-                    ray = head_out.get("ray", None)
-                    if ray is not None and ray.dim() == 4:
-                        ray = ray.unsqueeze(1)
-                    if ray is None:
-                        raise RuntimeError("ray not found in geometry head output")
-                    # 调整维度 [1,B,H,W,C] -> [B,1,H,W,C]
-                    if ray.shape[-1] == 6:
-                        pass
-                    elif ray.shape[2] == 6:
-                        ray = ray.permute(0, 1, 3, 4, 2)
+                    if GEOM_IMAGE_KEY is not None and GEOM_IMAGE_KEY in observation:
+                        img_key = GEOM_IMAGE_KEY
                     else:
-                        raise RuntimeError(f"Unexpected ray shape {ray.shape}")
-                    ray = ray.permute(1, 0, 2, 3, 4).contiguous()
-                    geom_tokens, _, _ = geom_adapter(ray.to(policy.device))
+                        img_candidates = [k for k in observation.keys() if "images" in k]
+                        img_key = img_candidates[0] if img_candidates else None
+                    if img_key is None:
+                        raise RuntimeError("No image key found for geometry prefix")
+                    img_tensor = observation[img_key]  # [B,C,H,W]
+                    imgs_cpu = img_tensor.detach().cpu()
+                    imgs_list = []
+                    for i in range(imgs_cpu.shape[0]):
+                        img_np = imgs_cpu[i].permute(1, 2, 0).float()
+                        if img_np.min() < 0:
+                            img_np = (img_np + 1) * 0.5
+                        img_np = (img_np.clamp(0, 1) * 255).to(torch.uint8).numpy()
+                        imgs_list.append(img_np)
+                    # 使用当前图像所在设备做混合精度，避免依赖 policy.device 属性
+                    with torch.no_grad(), torch.autocast(device_type=img_tensor.device.type, dtype=torch.bfloat16):
+                        imgs_da3_cpu, extr_da3, intr_da3 = geom_model._preprocess_inputs(imgs_list)
+                        imgs_da3, ex_t_da3, in_t_da3 = geom_model._prepare_model_inputs(
+                            imgs_da3_cpu, extr_da3, intr_da3
+                        )
+                        feats, _ = geom_model.model.backbone(imgs_da3, cam_token=None, export_feat_layers=[])
+                        H_da3, W_da3 = imgs_da3.shape[-2], imgs_da3.shape[-1]
+                        head_out = geom_model.model.head(feats, H_da3, W_da3, patch_start_idx=0)
+                        ray = head_out.get("ray", None)
+                        if ray is not None and ray.dim() == 4:
+                            ray = ray.unsqueeze(1)
+                        if ray is None:
+                            raise RuntimeError("ray not found in geometry head output")
+                        # 调整维度 [1,B,H,W,C] -> [B,1,H,W,C]
+                        if ray.shape[-1] == 6:
+                            pass
+                        elif ray.shape[2] == 6:
+                            ray = ray.permute(0, 1, 3, 4, 2)
+                        else:
+                            raise RuntimeError(f"Unexpected ray shape {ray.shape}")
+                        ray = ray.permute(1, 0, 2, 3, 4).contiguous()
+                        geom_tokens, _, _ = geom_adapter(ray.to(img_tensor.device))
+                    last_geom_tokens = geom_tokens
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Geometry prefix skipped (eval) due to error: {e}")
                 geom_tokens = None
