@@ -70,18 +70,18 @@ class GeometryTokenAdapter(nn.Module):
         # 合并 B, S 方便上采样
         x = x.view(B * S, C, H, W)
         x = F.interpolate(x, size=self.target_hw, mode="bilinear", align_corners=False)
-        # [B, S, C, H_t, W_t]
-        x = x.view(B, S, C, *self.target_hw)
-        # 展平空间+视角 -> [B, seq, C]
-        x = x.permute(0, 1, 3, 4, 2).contiguous().view(B, S * self.target_hw[0] * self.target_hw[1], C)
+        # [B*S, C, H_t, W_t]，将 S 视作 batch 维，保证每张图各自 14x14=196 tokens
+        x = x.view(B * S, C, *self.target_hw)
+        # 展平空间 -> [B*S, seq, C]
+        x = x.permute(0, 2, 3, 1).contiguous().view(B * S, self.target_hw[0] * self.target_hw[1], C)
         # 直接使用当前 dtype（建议外部将 adapter 参数/输入设为 bf16，以避免频繁转换）
-        tokens = self.proj(x)  # [B, seq, hidden_dim]
+        tokens = self.proj(x)  # [B*S, seq, hidden_dim]，hidden_dim 建议设为动作宽度
         tokens = tokens * self.alpha.to(dtype=tokens.dtype)
 
         # mask：全有效，全互看
         seq_len = tokens.shape[1]
-        pad_masks = torch.ones(B, seq_len, device=device, dtype=torch.bool)
-        att_masks = torch.zeros(B, seq_len, device=device, dtype=torch.bool)
+        pad_masks = torch.ones(B * S, seq_len, device=device, dtype=torch.bool)
+        att_masks = torch.zeros(B * S, seq_len, device=device, dtype=torch.bool)
         # 保持 dtype 与输入一致
         tokens = tokens.to(dtype=dtype)
         return tokens, pad_masks, att_masks

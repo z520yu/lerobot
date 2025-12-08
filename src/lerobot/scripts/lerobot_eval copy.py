@@ -233,6 +233,7 @@ def rollout(
     all_rewards = []
     all_successes = []
     all_dones = []
+    cached_prefix_kwargs: dict | None = None
 
     step = 0
     # Keep track of which environments are done.
@@ -260,18 +261,24 @@ def rollout(
 
         observation = preprocessor(observation)
 
-        extra_prefix_kwargs = None
-        if USE_GEOM_PREFIX and geom_model is not None and geom_adapter is not None:
+        # 仅在内部动作队列为空时才重算几何前缀，避免每步重复跑 DA3。
+        recompute_prefix = cached_prefix_kwargs is None
+        if hasattr(policy, "_action_queue"):
             try:
-                extra_prefix_kwargs = _build_geom_prefix(observation, policy, geom_model, geom_adapter)
+                recompute_prefix = len(policy._action_queue) == 0
+            except Exception:
+                recompute_prefix = True
+
+        if recompute_prefix and USE_GEOM_PREFIX and geom_model is not None and geom_adapter is not None:
+            try:
+                cached_prefix_kwargs = _build_geom_prefix(observation, policy, geom_model, geom_adapter)
             except Exception as e:
                 logging.warning(f"Geometry prefix skipped in eval due to error: {e}")
-                extra_prefix_kwargs = None
+                cached_prefix_kwargs = None
 
         with torch.inference_mode():
-            if extra_prefix_kwargs and hasattr(policy, "predict_action_chunk"):
-                action_chunk = policy.predict_action_chunk(observation, **extra_prefix_kwargs)
-                action = action_chunk[:, 0]
+            if cached_prefix_kwargs and hasattr(policy, "select_action"):
+                action = policy.select_action(observation, **cached_prefix_kwargs)
             else:
                 action = policy.select_action(observation)
         action = postprocessor(action)
