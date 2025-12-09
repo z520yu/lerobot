@@ -27,6 +27,7 @@ from torch import Tensor, nn
 from typing_extensions import Unpack
 
 from lerobot.utils.import_utils import _transformers_available
+GEOM_ADAPTER_PREFIX = "geom_adapter."
 
 # Conditional import for type checking and lazy loading
 if TYPE_CHECKING or _transformers_available:
@@ -1014,6 +1015,11 @@ class PI05Policy(PreTrainedPolicy):
                 print(f"Could not load state dict from remote files: {e}")
                 print("Returning model without loading pretrained weights")
                 return model
+
+            # Drop geometry adapter weights (stored with prefix) before loading core policy.
+            for k in list(original_state_dict.keys()):
+                if k.startswith(GEOM_ADAPTER_PREFIX):
+                    original_state_dict.pop(k)
 
             # First, fix any key differences # see openpi `model.py, _fix_pytorch_state_dict_keys`
             fixed_state_dict = model._fix_pytorch_state_dict_keys(original_state_dict, model.config)

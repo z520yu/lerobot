@@ -66,6 +66,8 @@ import einops
 import gymnasium as gym
 import numpy as np
 import torch
+from huggingface_hub.constants import SAFETENSORS_SINGLE_FILE
+from safetensors.torch import load_file
 from termcolor import colored
 from torch import Tensor, nn
 from tqdm import trange
@@ -84,7 +86,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.pi05.geom_adapter import GeometryTokenAdapter
 from lerobot.policies.pi05.modeling_pi05 import get_gemma_config
 from lerobot.processor import PolicyAction, PolicyProcessorPipeline
-from lerobot.utils.constants import ACTION, DONE, OBS_STR, REWARD
+from lerobot.utils.constants import ACTION, DONE, OBS_STR, PRETRAINED_MODEL_DIR, REWARD
 from lerobot.utils.io_utils import write_video
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.utils import (
@@ -101,6 +103,34 @@ GEOM_TARGET_HW = (14, 14)
 GEOM_INIT_ALPHA = 0.1
 FREEZE_GEOM_MODEL = True
 GEOM_IMAGE_KEY = "observation.images.image2"  # 固定 image2 作为几何前缀来源
+GEOM_ADAPTER_PREFIX = "geom_adapter."
+
+
+def _load_geom_adapter_state_from_model(model_dir: Path | str | None) -> dict | None:
+    """Load adapter weights from model.safetensors (keys prefixed with geom_adapter.)."""
+    if model_dir is None:
+        return None
+    base_dir = Path(model_dir)
+
+    model_candidates = []
+    if base_dir.is_file():
+        model_candidates.append(base_dir)
+    if base_dir.is_dir():
+        model_candidates.append(base_dir / SAFETENSORS_SINGLE_FILE)
+        model_candidates.append(base_dir / PRETRAINED_MODEL_DIR / SAFETENSORS_SINGLE_FILE)
+
+    for model_path in model_candidates:
+        if model_path.is_file():
+            state = load_file(str(model_path))
+            adapter_state = {
+                k.removeprefix(GEOM_ADAPTER_PREFIX): v
+                for k, v in state.items()
+                if k.startswith(GEOM_ADAPTER_PREFIX)
+            }
+            if adapter_state:
+                return adapter_state
+
+    return None
 
 
 def _build_geom_prefix(
@@ -647,7 +677,11 @@ def eval_main(cfg: EvalPipelineConfig):
             target_hw=GEOM_TARGET_HW,
             hidden_dim=hidden_dim,
             init_alpha=GEOM_INIT_ALPHA,
-        ).to(device=device, dtype=torch.bfloat16)
+        ).to(device=device)  # keep adapter params in fp32; casting happens via inputs/autocast
+        adapter_state = _load_geom_adapter_state_from_model(cfg.policy.pretrained_path)
+        if adapter_state:
+            geom_adapter.load_state_dict(adapter_state)
+            logging.info("Loaded geometry adapter weights from model.safetensors")
 
     # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
     preprocessor_overrides = {

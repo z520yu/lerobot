@@ -25,6 +25,8 @@ import os
 from accelerate import Accelerator
 from termcolor import colored
 from torch.optim import Optimizer
+from huggingface_hub.constants import SAFETENSORS_SINGLE_FILE
+from safetensors.torch import load_file, save_file
 
 from lerobot.configs import parser
 from lerobot.configs.train import TrainPipelineConfig
@@ -60,14 +62,71 @@ from lerobot.utils.utils import (
     has_method,
     init_logging,
 )
+from lerobot.utils.constants import PRETRAINED_MODEL_DIR
 
 # Geometry prefix settings (only for Pi0.5; set USE_GEOM_PREFIX=False to disable)
 USE_GEOM_PREFIX = True  # 默认开启，如不需几何前缀请改为 False
 GEOM_MODEL_ID = "depth-anything/DA3-LARGE"
 GEOM_TARGET_HW = (14, 14)
 GEOM_INIT_ALPHA = 0.1
+GEOM_TARGET_ALPHA = 0.3  # warm up towards this scaling
+GEOM_ALPHA_WARMUP_STEPS = 2000
 FREEZE_GEOM_MODEL = True
 GEOM_IMAGE_KEY = "observation.images.image2"  # 固定使用 image2 作为几何前缀，减少多路图像显存
+GEOM_ADAPTER_PREFIX = "geom_adapter."
+
+
+def _load_geom_adapter_state_from_model(model_dir: Path | str | None) -> dict | None:
+    """Read adapter weights stored inside model.safetensors (prefixed with geom_adapter.)."""
+    if model_dir is None:
+        return None
+    base_dir = Path(model_dir)
+
+    model_candidates = []
+    if base_dir.is_file():
+        model_candidates.append(base_dir)
+    if base_dir.is_dir():
+        model_candidates.append(base_dir / SAFETENSORS_SINGLE_FILE)
+        model_candidates.append(base_dir / PRETRAINED_MODEL_DIR / SAFETENSORS_SINGLE_FILE)
+
+    for model_path in model_candidates:
+        if model_path.is_file():
+            state = load_file(str(model_path))
+            adapter_state = {
+                k.removeprefix(GEOM_ADAPTER_PREFIX): v
+                for k, v in state.items()
+                if k.startswith(GEOM_ADAPTER_PREFIX)
+            }
+            if adapter_state:
+                return adapter_state
+
+    return None
+
+
+def _merge_geom_adapter_into_model_file(model_dir: Path | str, geom_adapter: GeometryTokenAdapter | None) -> None:
+    """Persist adapter weights inside model.safetensors so they travel with the main policy."""
+    if geom_adapter is None:
+        return
+    base_dir = Path(model_dir)
+    model_candidates = []
+    if base_dir.is_file():
+        model_candidates.append(base_dir)
+    if base_dir.is_dir():
+        model_candidates.append(base_dir / SAFETENSORS_SINGLE_FILE)
+        model_candidates.append(base_dir / PRETRAINED_MODEL_DIR / SAFETENSORS_SINGLE_FILE)
+
+    model_path = next((p for p in model_candidates if p.is_file()), None)
+    if model_path is None:
+        logging.warning(f"Geometry adapter save skipped; model file not found under {base_dir}")
+        return
+
+    base_state = load_file(str(model_path))
+    base_state = {k: v for k, v in base_state.items() if not k.startswith(GEOM_ADAPTER_PREFIX)}
+    adapter_state = {
+        f"{GEOM_ADAPTER_PREFIX}{k}": v.detach().cpu() for k, v in geom_adapter.state_dict().items()
+    }
+    base_state.update(adapter_state)
+    save_file(base_state, str(model_path))
 
 
 def update_policy(
@@ -249,7 +308,17 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             target_hw=GEOM_TARGET_HW,
             hidden_dim=hidden_dim,
             init_alpha=GEOM_INIT_ALPHA,
-        ).to(device=device, dtype=torch.bfloat16)
+        ).to(device=device)  # keep params in fp32; casting happens via inputs/autocast
+        # 优先从 checkpoint / pretrained_path 恢复 adapter
+        loaded_state = None
+        if cfg.resume and cfg.checkpoint_path is not None:
+            loaded_state = _load_geom_adapter_state_from_model(Path(cfg.checkpoint_path) / PRETRAINED_MODEL_DIR)
+        if loaded_state is None and cfg.policy.pretrained_path is not None:
+            loaded_state = _load_geom_adapter_state_from_model(cfg.policy.pretrained_path)
+        if loaded_state:
+            geom_adapter.load_state_dict(loaded_state)
+            if is_main_process:
+                logging.info("Loaded geometry adapter weights from model.safetensors")
 
     # Create processors - only provide dataset_stats if not resuming from saved processors
     processor_kwargs = {}
@@ -388,6 +457,14 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         extra_forward_kwargs: dict | None = None
         if USE_GEOM_PREFIX and geom_model is not None and geom_adapter is not None:
             try:
+                # alpha warmup：前 GEOM_ALPHA_WARMUP_STEPS 将 alpha 从 GEOM_INIT_ALPHA 线性拉到 GEOM_TARGET_ALPHA
+                if GEOM_ALPHA_WARMUP_STEPS > 0 and step < GEOM_ALPHA_WARMUP_STEPS:
+                    warmup_frac = step / GEOM_ALPHA_WARMUP_STEPS
+                    new_alpha = GEOM_INIT_ALPHA + warmup_frac * (GEOM_TARGET_ALPHA - GEOM_INIT_ALPHA)
+                    geom_adapter.alpha.data.copy_(
+                        torch.tensor(new_alpha, device=geom_adapter.alpha.device, dtype=geom_adapter.alpha.dtype)
+                    )
+
                 # 选择图像键：优先配置 GEOM_IMAGE_KEY，否则在 batch 中寻找所有存在的 image_feature 键
                 if GEOM_IMAGE_KEY is not None:
                     geom_keys = [GEOM_IMAGE_KEY] if isinstance(GEOM_IMAGE_KEY, str) else list(GEOM_IMAGE_KEY)
@@ -437,7 +514,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                     else:
                         raise RuntimeError(f"Unexpected ray shape {ray.shape} for key {img_key}")
 
-                    # 几何分支全链路 bfloat16，避免 dtype 来回转换
+                    # 几何分支：输入转换到 adapter 参数 dtype（fp32），计算仍在 autocast 下以节省显存
                     ray_t = ray_t.to(dtype=geom_adapter.alpha.dtype)
                     tokens, pad, att = geom_adapter(ray_t)
                     geom_tokens_list.append(tokens)
@@ -499,6 +576,10 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                     preprocessor=preprocessor,
                     postprocessor=postprocessor,
                 )
+                if geom_adapter is not None:
+                    _merge_geom_adapter_into_model_file(
+                        checkpoint_dir / PRETRAINED_MODEL_DIR, accelerator.unwrap_model(geom_adapter)
+                    )
                 try:
                     update_last_checkpoint(checkpoint_dir)
                 except OSError as e:
