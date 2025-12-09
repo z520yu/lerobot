@@ -593,9 +593,9 @@ def eval_main(cfg: EvalPipelineConfig):
 
     policy.eval()
 
-    # Geometry model + adapter（仅 Pi0.5）
+    # Geometry model + adapter（仅 Pi0.5）；优先使用 policy 自带 adapter
     geom_model = None
-    geom_adapter = None
+    geom_adapter = getattr(policy, "geom_adapter", None)
     if USE_GEOM_PREFIX and getattr(policy.config, "type", None) == "pi05":
         logging.info(f"Loading geometry model: {GEOM_MODEL_ID}")
         geom_model = DepthAnything3.from_pretrained(GEOM_MODEL_ID).to(device)
@@ -603,16 +603,18 @@ def eval_main(cfg: EvalPipelineConfig):
             for p in geom_model.parameters():
                 p.requires_grad = False
         geom_model.eval()
-        # 使用动作专家配置对齐宽度
-        cfg_expert = get_gemma_config(policy.config.action_expert_variant)
-        # Adapter 输出对齐动作宽度（in_features），再由 geom_k_proj 映射到 H*D
-        hidden_dim = cfg_expert.width
-        geom_adapter = GeometryTokenAdapter(
-            geom_dim=6,
-            target_hw=GEOM_TARGET_HW,
-            hidden_dim=hidden_dim,
-            init_alpha=GEOM_INIT_ALPHA,
-        ).to(device=device, dtype=torch.bfloat16)
+        if geom_adapter is None:
+            # 使用动作专家配置对齐宽度
+            cfg_expert = get_gemma_config(policy.config.action_expert_variant)
+            hidden_dim = cfg_expert.width
+            geom_adapter = GeometryTokenAdapter(
+                geom_dim=6,
+                target_hw=GEOM_TARGET_HW,
+                hidden_dim=hidden_dim,
+                init_alpha=GEOM_INIT_ALPHA,
+            ).to(device=device, dtype=torch.bfloat16)
+        else:
+            geom_adapter = geom_adapter.to(device=device)
 
     # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
     preprocessor_overrides = {

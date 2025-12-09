@@ -28,6 +28,11 @@ from typing_extensions import Unpack
 
 from lerobot.utils.import_utils import _transformers_available
 
+# NOTE: GeometryTokenAdapter is an optional submodule for pi05; imported lazily to avoid circular deps.
+try:
+    from lerobot.policies.pi05.geom_adapter import GeometryTokenAdapter
+except Exception:  # noqa: BLE001
+    GeometryTokenAdapter = None
 # Conditional import for type checking and lazy loading
 if TYPE_CHECKING or _transformers_available:
     from transformers.models.auto import CONFIG_MAPPING
@@ -447,7 +452,7 @@ class PaliGemmaWithExpertModel(
         geom_out_dim = action_expert_config.num_heads * action_expert_config.head_dim
         self.geom_k_proj = nn.Linear(action_expert_config.width, geom_out_dim)
         self.geom_v_proj = nn.Linear(action_expert_config.width, geom_out_dim)
-        self.geom_alpha = nn.Parameter(torch.tensor(0.1))
+        self.geom_alpha = nn.Parameter(torch.tensor(1.0))
 
         self.to_bfloat16_for_selected_params(precision)
 
@@ -974,6 +979,12 @@ class PI05Policy(PreTrainedPolicy):
         super().__init__(config)
         config.validate_features()
         self.config = config
+
+        # Optional geometry adapter (kept as submodule so it is saved with the policy)
+        geom_adapter_cfg = getattr(config, "geom_adapter", None)
+        self.geom_adapter: GeometryTokenAdapter | None = None
+        if geom_adapter_cfg is not None and GeometryTokenAdapter is not None:
+            self.geom_adapter = GeometryTokenAdapter(**geom_adapter_cfg)
 
         # Initialize the core PI05 model
         self.init_rtc_processor()

@@ -275,6 +275,14 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             hidden_dim=hidden_dim,
             init_alpha=GEOM_INIT_ALPHA,
         ).to(device=device)  # 保持 fp32，避免极小更新在 bf16 下被量化掉
+        # 将 adapter 注册到 policy，保存/加载时一并处理
+        policy.geom_adapter = geom_adapter
+        policy.config.geom_adapter = {
+            "geom_dim": 6,
+            "target_hw": GEOM_TARGET_HW,
+            "hidden_dim": hidden_dim,
+            "init_alpha": GEOM_INIT_ALPHA,
+        }
 
     # Create processors - only provide dataset_stats if not resuming from saved processors
     processor_kwargs = {}
@@ -313,9 +321,6 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if is_main_process:
         logging.info("Creating optimizer and scheduler")
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
-    if geom_adapter is not None:
-        geom_params = [p for p in geom_adapter.parameters() if p.requires_grad]
-        optimizer.param_groups[0]["params"] = list(optimizer.param_groups[0]["params"]) + geom_params
 
     step = 0  # number of policy updates (forward + backward + optim)
 
@@ -368,13 +373,8 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     # Prepare everything with accelerator
     accelerator.wait_for_everyone()
     to_prepare = [policy, optimizer, dataloader, lr_scheduler]
-    if geom_adapter is not None:
-        to_prepare.insert(1, geom_adapter)
     prepared = accelerator.prepare(*to_prepare)
-    if geom_adapter is not None:
-        policy, geom_adapter, optimizer, dataloader, lr_scheduler = prepared
-    else:
-        policy, optimizer, dataloader, lr_scheduler = prepared
+    policy, optimizer, dataloader, lr_scheduler = prepared
     dl_iter = cycle(dataloader)
 
     policy.train()
