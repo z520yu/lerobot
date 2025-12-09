@@ -274,7 +274,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             target_hw=GEOM_TARGET_HW,
             hidden_dim=hidden_dim,
             init_alpha=GEOM_INIT_ALPHA,
-        ).to(device=device, dtype=torch.bfloat16)
+        ).to(device=device)  # 保持 fp32，避免极小更新在 bf16 下被量化掉
 
     # Create processors - only provide dataset_stats if not resuming from saved processors
     processor_kwargs = {}

@@ -467,6 +467,10 @@ class PaliGemmaWithExpertModel(
             "input_layernorm",
             "post_attention_layernorm",
             "model.norm",
+            # keep geom projections/scale in fp32 so tiny updates don't vanish under bf16 quantization
+            "geom_k_proj",
+            "geom_v_proj",
+            "geom_alpha",
         ]
 
         for name, param in self.named_parameters():
