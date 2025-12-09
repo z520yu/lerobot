@@ -50,6 +50,9 @@ class PI05Config(PreTrainedConfig):
     # Real-Time Chunking (RTC) configuration
     rtc_config: RTCConfig | None = None
 
+    # Optional geometry adapter config (when using geometry prefix)
+    geom_adapter: dict | None = None
+
     image_resolution: tuple[int, int] = (224, 224)  # see openpi `preprocessing_pytorch.py`
 
     # Add empty images. Used to add empty cameras when no image features are present.
