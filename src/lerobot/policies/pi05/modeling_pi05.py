@@ -1077,6 +1077,15 @@ class PI05Policy(PreTrainedPolicy):
             remap_count = 0
 
             for key, value in fixed_state_dict.items():
+                # Adapter keys应保留在顶层，不要加 model. 前缀；同时兼容历史保存的 model.geom_adapter.*
+                if key.startswith("model.geom_adapter."):
+                    new_key = key[len("model.") :]
+                    remapped_state_dict[new_key] = value
+                    continue
+                if key.startswith("geom_adapter."):
+                    remapped_state_dict[key] = value
+                    continue
+
                 if not key.startswith("model."):
                     new_key = f"model.{key}"
                     remapped_state_dict[new_key] = value
