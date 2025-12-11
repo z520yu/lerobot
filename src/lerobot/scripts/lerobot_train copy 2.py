@@ -357,21 +357,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         logging.info("Creating optimizer and scheduler")
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
     if geom_adapter is not None:
-        # 将适配器参数放入独立 param_group，默认超参与首组一致，可在此处定制
-        base_group = optimizer.param_groups[0]
-        adapter_lr = base_group.get("initial_lr", base_group["lr"])
-        adapter_wd = base_group.get("weight_decay", 0.0)
+        # 将适配器参数加入同一个 param_group，避免额外状态导致显存开销
         geom_params = [p for p in geom_adapter.parameters() if p.requires_grad]
-        optimizer.add_param_group(
-            {
-                "params": geom_params,
-                "lr": adapter_lr,
-                "weight_decay": adapter_wd,
-                "initial_lr": adapter_lr,
-            }
-        )
-        if lr_scheduler is not None and hasattr(lr_scheduler, "base_lrs"):
-            lr_scheduler.base_lrs.append(adapter_lr)
+        optimizer.param_groups[0]["params"] = list(optimizer.param_groups[0]["params"]) + geom_params
 
     step = 0  # number of policy updates (forward + backward + optim)
 

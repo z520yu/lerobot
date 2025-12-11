@@ -189,7 +189,11 @@ def _build_geom_prefix(
         else:
             raise RuntimeError(f"Unexpected ray shape {ray.shape} for key {img_key}")
 
-        tokens, pad, att = geom_adapter(ray_t)
+        # 保持与训练一致：在 autocast 下用 bf16 计算，适配器参数仍为 fp32
+        with torch.autocast(device_type=geom_model.device.type, dtype=torch.bfloat16):
+            ray_t = ray_t.to(dtype=torch.bfloat16)
+            tokens, pad, att = geom_adapter(ray_t)
+            tokens = tokens.to(dtype=torch.bfloat16)
         geom_tokens_list.append(tokens)
         geom_pads.append(pad)
         geom_atts.append(att)
