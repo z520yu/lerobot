@@ -265,24 +265,31 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             for p in geom_model.parameters():
                 p.requires_grad = False
         geom_model.eval()
-        # 使用动作专家配置对齐宽度
-        cfg_expert = get_gemma_config(policy.config.action_expert_variant)
-        # Adapter 输出对齐动作宽度（in_features），再由 geom_k_proj 映射到 H*D
-        hidden_dim = cfg_expert.width
-        geom_adapter = GeometryTokenAdapter(
-            geom_dim=6,  # ray 通道
-            target_hw=GEOM_TARGET_HW,
-            hidden_dim=hidden_dim,
-            init_alpha=GEOM_INIT_ALPHA,
-        ).to(device=device)  # 保持 fp32，避免极小更新在 bf16 下被量化掉
-        # 将 adapter 注册到 policy，保存/加载时一并处理
-        policy.geom_adapter = geom_adapter
-        policy.config.geom_adapter = {
-            "geom_dim": 6,
-            "target_hw": GEOM_TARGET_HW,
-            "hidden_dim": hidden_dim,
-            "init_alpha": GEOM_INIT_ALPHA,
-        }
+        geom_adapter = getattr(policy, "geom_adapter", None)
+        if geom_adapter is None:
+            # 使用动作专家配置对齐宽度
+            cfg_expert = get_gemma_config(policy.config.action_expert_variant)
+            # Adapter 输出对齐动作宽度（in_features），再由 geom_k_proj 映射到 H*D
+            hidden_dim = cfg_expert.width
+            geom_adapter = GeometryTokenAdapter(
+                geom_dim=6,  # ray 通道
+                target_hw=GEOM_TARGET_HW,
+                hidden_dim=hidden_dim,
+                init_alpha=GEOM_INIT_ALPHA,
+            ).to(device=device)  # 保持 fp32，避免极小更新在 bf16 下被量化掉
+            # 将 adapter 注册到 policy，保存/加载时一并处理
+            policy.geom_adapter = geom_adapter
+        else:
+            geom_adapter = geom_adapter.to(device=device)
+            hidden_dim = geom_adapter.proj.out_features
+
+        if getattr(policy.config, "geom_adapter", None) is None:
+            policy.config.geom_adapter = {
+                "geom_dim": geom_adapter.proj.in_features,
+                "target_hw": tuple(getattr(geom_adapter, "target_hw", GEOM_TARGET_HW)),
+                "hidden_dim": hidden_dim,
+                "init_alpha": float(geom_adapter.alpha.detach().cpu().item()),
+            }
 
     # Create processors - only provide dataset_stats if not resuming from saved processors
     processor_kwargs = {}
