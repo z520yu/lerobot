@@ -995,6 +995,8 @@ class PI05Policy(PreTrainedPolicy):
             self.model.gradient_checkpointing_enable()
 
         self.model.to(config.device)
+        if self.geom_adapter is not None:
+            self.geom_adapter.to(config.device)
 
         self.reset()
 

@@ -119,7 +119,7 @@ def update_policy(
                     or "geom_v_proj" in name
                     or "geom_alpha" in name
                     or name == "alpha"  # adapter 缩放
-                    or "proj" in name and "geom" in prefix  # adapter proj
+                    or ("proj" in name and prefix.startswith("adapter."))
                 ):
                     continue
                 grad = param.grad
