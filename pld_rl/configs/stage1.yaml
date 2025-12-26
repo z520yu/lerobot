@@ -1,0 +1,67 @@
+# Stage 1: Residual RL Training Configuration
+# This config is used by scripts/train_residual_stage1.py
+
+# === Base Policy ===
+base_policy_path: "./outputs/pi05_base_sft"
+base_chunk_size: 50
+base_n_action_steps: 50
+
+# === Environment ===
+env_name: "libero_10"
+task_id: 0
+env_max_steps: 500
+action_dim: 7
+state_dim: 9  # pos:3 + quat:4 + gripper:2
+
+# === Residual Policy ===
+residual_hidden_dims:
+  - 256
+  - 256
+residual_std_min: 0.01
+residual_std_max: 1.0
+
+# === Critic ===
+critic_hidden_dims:
+  - 256
+  - 256
+num_critics: 2
+
+# === RL Hyperparameters ===
+discount: 0.99
+tau: 0.005
+actor_lr: 3.0e-4
+critic_lr: 3.0e-4
+temperature_init: 0.1
+
+# === Residual Scale Schedule ===
+xi_init: 0.05
+xi_final: 0.5
+xi_warmup_episodes: 100
+
+# === Buffer ===
+offline_buffer_capacity: 50000
+online_buffer_capacity: 200000
+batch_size: 256
+
+# === Training ===
+warmup_episodes: 50
+probe_max_steps: 100
+critic_actor_update_ratio: 2
+calql_pretrain_steps: 5000
+max_episodes: 1000
+eval_freq: 50
+save_freq: 100
+log_freq: 10
+
+# === Encoder ===
+use_latent_encoder: true
+latent_dim: 256
+freeze_encoder: true
+
+# === PI05 Specific ===
+tokenizer_max_length: 200
+
+# === Output ===
+output_dir: "./outputs/pld_rl_stage1"
+seed: 42
+device: "cuda"

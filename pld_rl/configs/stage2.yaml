@@ -1,0 +1,38 @@
+# Stage 2: PLD Data Collection Configuration
+# This config is used by scripts/collect_pld_stage2.py
+
+# === Base Policy ===
+base_policy_path: "./outputs/pi05_base_sft"
+base_chunk_size: 50
+base_n_action_steps: 50
+
+# === Environment ===
+env_name: "libero_10"
+env_max_steps: 500
+action_dim: 7
+state_dim: 9
+
+# === Residual Policy (for loading checkpoint) ===
+residual_hidden_dims:
+  - 256
+  - 256
+residual_std_min: 0.01
+residual_std_max: 1.0
+
+# === PLD Collection ===
+pld_num_episodes: 500
+pld_alpha: 0.5  # T_base ~ Uniform(0, alpha * T_max)
+xi_final: 0.5   # Final residual scale for data collection
+
+# === Encoder ===
+use_latent_encoder: true
+latent_dim: 256
+freeze_encoder: true
+
+# === PI05 Specific ===
+tokenizer_max_length: 200
+
+# === Output ===
+output_dir: "./outputs/pld_rl_stage2"
+seed: 42
+device: "cuda"
