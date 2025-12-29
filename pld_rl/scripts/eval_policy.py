@@ -19,7 +19,7 @@ import torch
 from tqdm import tqdm
 
 from pld_rl.configs.pld_config import PLDConfig
-from pld_rl.envs.libero_adapter import LiberoAdapter
+from pld_rl.envs.libero_adapter import LiberoAdapter, ProprioOnlyAdapter
 from pld_rl.envs.libero_make import make_libero_env
 from pld_rl.policies.pi05_base_wrapper import PI05BaseWrapper
 from pld_rl.policies.residual_gaussian import ResidualGaussianPolicy
@@ -244,15 +244,23 @@ def main():
     # Create environment
     env = make_libero_env(
         task_name=config.env_name,
+        task_id=config.task_id,
         max_episode_steps=config.env_max_steps,
     )
 
     # Create adapter
-    adapter = LiberoAdapter(
-        device=config.device,
-        latent_dim=config.latent_dim,
-        state_dim=config.state_dim,
-    )
+    if config.use_latent_encoder:
+        adapter = LiberoAdapter(
+            device=config.device,
+            latent_dim=config.latent_dim,
+            state_dim=config.state_dim,
+            freeze_encoder=config.freeze_encoder,
+        )
+    else:
+        adapter = ProprioOnlyAdapter(
+            state_dim=config.state_dim,
+            device=config.device,
+        )
 
     # Load base policy
     base_wrapper = PI05BaseWrapper(

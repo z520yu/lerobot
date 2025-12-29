@@ -18,7 +18,7 @@ import torch
 from tqdm import tqdm
 
 from pld_rl.configs.pld_config import PLDConfig
-from pld_rl.envs.libero_adapter import LiberoAdapter
+from pld_rl.envs.libero_adapter import LiberoAdapter, ProprioOnlyAdapter
 from pld_rl.envs.libero_make import make_libero_env
 from pld_rl.policies.pi05_base_wrapper import PI05BaseWrapper
 from pld_rl.policies.residual_gaussian import ResidualGaussianPolicy
@@ -31,6 +31,7 @@ from pld_rl.rl.schedules import XiScheduler
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
+    force=True,
 )
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,18 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _setup_file_logger(output_dir: Path) -> None:
+    log_path = output_dir / "train.log"
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if isinstance(handler, logging.FileHandler) and handler.baseFilename == str(log_path):
+            return
+    file_handler = logging.FileHandler(log_path, mode="a")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    root_logger.addHandler(file_handler)
 
 
 def _next_base_action_and_source(
@@ -141,11 +154,20 @@ def collect_offline_data(
         is_success = info.get("success", False)
 
         if config.log_freq > 0 and episode_count % config.log_freq == 0:
+            success_rate = success_count / episode_count if episode_count > 0 else 0.0
             logger.info(
                 "Offline next_base_action_source: base_copy=%d chunk_cached=%d chunk_refill=%d",
                 source_counts["base_copy"],
                 source_counts["chunk_cached"],
                 source_counts["chunk_refill"],
+            )
+            logger.info(
+                "Offline progress: episodes=%d success=%d rate=%.2f%% offline_size=%d last_steps=%d",
+                episode_count,
+                success_count,
+                success_rate * 100.0,
+                replay_buffer.offline_size,
+                len(trajectory),
             )
 
         # Only add successful episodes to offline buffer
@@ -190,6 +212,7 @@ def pretrain_critic_calql(
 
     calql = CalQLPretrainer(critic, residual_policy, config, device=config.device)
 
+    log_every = max(100, config.calql_pretrain_steps // 10)
     pbar = tqdm(range(config.calql_pretrain_steps), desc="Cal-QL pretraining")
     losses_avg = {"td_loss": 0.0, "cql_loss": 0.0, "total_loss": 0.0}
 
@@ -203,6 +226,17 @@ def pretrain_critic_calql(
 
         if step % 100 == 0:
             pbar.set_postfix({k: f"{v:.4f}" for k, v in losses_avg.items()})
+        if step % log_every == 0 or step == config.calql_pretrain_steps - 1:
+            logger.info(
+                "Cal-QL step %d/%d td=%.4f cql=%.4f total=%.4f q1=%.2f q2=%.2f",
+                step + 1,
+                config.calql_pretrain_steps,
+                losses_avg.get("td_loss", float("nan")),
+                losses_avg.get("cql_loss", float("nan")),
+                losses_avg.get("total_loss", float("nan")),
+                losses.get("q1_mean", float("nan")),
+                losses.get("q2_mean", float("nan")),
+            )
 
     logger.info(f"Cal-QL pretraining complete. Final losses: {losses_avg}")
     return losses_avg
@@ -310,6 +344,10 @@ def train_residual_rl(
     """
     logger.info("Starting residual RL training...")
 
+    def _mean_loss(loss_list: list[dict], key: str) -> float:
+        values = [loss[key] for loss in loss_list if key in loss]
+        return float(np.mean(values)) if values else float("nan")
+
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -341,8 +379,9 @@ def train_residual_rl(
         env_batch = adapter.env_obs_to_batch(obs, task_text_ep)
         base_action = base_wrapper.act(env_batch)
 
-        # Get current xi
-        xi = xi_scheduler.get(episode)
+        # Get current xi based on residual-active episode index.
+        res_episode = max(0, episode - config.warmup_episodes)
+        xi = xi_scheduler.get(res_episode)
 
         episode_reward = 0.0
         episode_steps = 0
@@ -405,21 +444,33 @@ def train_residual_rl(
 
         # Logging
         if losses_episode:
-            avg_losses = {
-                k: np.mean([l[k] for l in losses_episode if k in l])
-                for k in losses_episode[0].keys()
-            }
             pbar.set_postfix({
                 "reward": f"{episode_reward:.2f}",
                 "steps": episode_steps,
                 "xi": f"{xi:.3f}",
-                "q": f"{avg_losses.get('q1_mean', 0):.2f}",
+                "q": f"{_mean_loss(losses_episode, 'q1_mean'):.2f}",
             })
 
         if config.log_freq > 0 and episode > 0 and episode % config.log_freq == 0:
+            avg_q = _mean_loss(losses_episode, "q1_mean")
+            avg_critic = _mean_loss(losses_episode, "critic_loss")
+            avg_actor = _mean_loss(losses_episode, "actor_loss")
+            avg_alpha = _mean_loss(losses_episode, "alpha")
             logger.info(
-                "Episode %d next_base_action_source: base_copy=%d chunk_cached=%d chunk_refill=%d",
+                "Episode %d (res_ep=%d, xi=%.3f, reward=%.2f, steps=%d, q=%.2f, "
+                "critic=%.4f, actor=%.4f, alpha=%.3f, offline=%d, online=%d) "
+                "next_base_action_source: base_copy=%d chunk_cached=%d chunk_refill=%d",
                 episode,
+                res_episode,
+                xi,
+                episode_reward,
+                episode_steps,
+                avg_q,
+                avg_critic,
+                avg_actor,
+                avg_alpha,
+                replay_buffer.offline_size,
+                replay_buffer.online_size,
                 source_counts["base_copy"],
                 source_counts["chunk_cached"],
                 source_counts["chunk_refill"],
@@ -427,11 +478,14 @@ def train_residual_rl(
 
         # Evaluation
         if episode > 0 and episode % config.eval_freq == 0:
+            is_warmup_eval = episode < config.warmup_episodes
+            eval_xi = 0.0 if is_warmup_eval else xi
             eval_metrics = evaluate_policy(
                 env, base_wrapper, trainer.policy, adapter,
-                config, xi, num_episodes=10, task_text=task_text,
+                config, eval_xi, num_episodes=10, task_text=task_text,
             )
-            logger.info(f"Episode {episode} - Eval: {eval_metrics}")
+            warmup_tag = " (warmup eval)" if is_warmup_eval else ""
+            logger.info(f"Episode {episode} - Eval{warmup_tag}: {eval_metrics}")
 
             if eval_metrics["success_rate"] > best_success_rate:
                 best_success_rate = eval_metrics["success_rate"]
@@ -476,6 +530,10 @@ def main():
     set_seed(config.seed)
     logger.info(f"Config: {config}")
 
+    output_dir = Path(config.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _setup_file_logger(output_dir)
+
     # Create environment
     env = make_libero_env(
         task_name=config.env_name,
@@ -484,11 +542,18 @@ def main():
     )
 
     # Create adapter
-    adapter = LiberoAdapter(
-        device=config.device,
-        latent_dim=config.latent_dim,
-        state_dim=config.state_dim,
-    )
+    if config.use_latent_encoder:
+        adapter = LiberoAdapter(
+            device=config.device,
+            latent_dim=config.latent_dim,
+            state_dim=config.state_dim,
+            freeze_encoder=config.freeze_encoder,
+        )
+    else:
+        adapter = ProprioOnlyAdapter(
+            state_dim=config.state_dim,
+            device=config.device,
+        )
 
     # Load base policy
     base_wrapper = PI05BaseWrapper(

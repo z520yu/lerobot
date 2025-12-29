@@ -76,6 +76,28 @@ class PI05BaseWrapper:
         # This is exactly how lerobot-eval loads them
         self._load_processors_from_pretrained(checkpoint_path)
 
+        # If processor configs are missing, rebuild them from dataset stats.
+        if self.preprocessor is None or self.postprocessor is None:
+            stats = dataset_stats or self._load_dataset_stats(checkpoint_path)
+            if stats is not None:
+                try:
+                    from lerobot.policies.pi05.processor_pi05 import make_pi05_pre_post_processors
+
+                    # Ensure processor device matches runtime device.
+                    if getattr(self.config, "device", None) != str(self.device):
+                        self.config.device = str(self.device)
+
+                    stats = self._convert_stats_to_tensors(stats)
+                    self.preprocessor, self.postprocessor = make_pi05_pre_post_processors(
+                        self.config, stats
+                    )
+                    logger.info("Built preprocessor/postprocessor from dataset stats")
+                except Exception as e:
+                    logger.warning(f"Failed to build processors from dataset stats: {e}")
+                    logger.warning("Falling back to manual preprocessing (may have normalization issues!)")
+            else:
+                logger.warning("Dataset stats not found; falling back to manual preprocessing.")
+
         # Get actual action dimension from config
         self._actual_action_dim = None
         if hasattr(self.config, 'output_features') and 'action' in self.config.output_features:
@@ -252,19 +274,20 @@ class PI05BaseWrapper:
             batch = self._manual_preprocess(batch)
 
         with torch.no_grad():
-            # Use select_action which handles action chunking internally
-            action = self.policy.select_action(batch)
+            # Predict a full chunk once to avoid double inference and queue mismatch.
+            action_chunk = self.policy.predict_action_chunk(batch)
 
             # Handle different output shapes
-            if action.dim() == 3:  # (1, chunk_size, action_dim)
-                action_chunk = action[0]  # (chunk_size, action_dim)
-            elif action.dim() == 2:  # (1, action_dim) - single action
-                # Need to get full chunk
-                action_chunk = self.policy.predict_action_chunk(batch)
-                if action_chunk.dim() == 3:
-                    action_chunk = action_chunk[0]
+            if action_chunk.dim() == 3:  # (1, chunk_size, action_dim)
+                action_chunk = action_chunk[0]
+            elif action_chunk.dim() == 2:  # (1, action_dim) - single action
+                # Treat as a single-step chunk
+                action_chunk = action_chunk
             else:
-                action_chunk = action.unsqueeze(0)
+                action_chunk = action_chunk.unsqueeze(0)
+
+        # Align with lerobot select_action behavior: use only the first n_action_steps.
+        action_chunk = action_chunk[: self.n_action_steps]
 
         # Postprocess if available (handles unnormalization)
         # PolicyAction is just torch.Tensor, not a dict!

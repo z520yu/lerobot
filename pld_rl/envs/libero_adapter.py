@@ -52,6 +52,7 @@ class LiberoAdapter:
         image_key_mapping: dict[str, str] | None = None,
         single_camera: bool = False,
         normalize_images: bool | None = None,
+        freeze_encoder: bool = True,
     ):
         """
         Args:
@@ -72,10 +73,16 @@ class LiberoAdapter:
 
         # Default: use pretrained ResNet encoder
         if encoder is None:
-            self.encoder = ResNetV1Encoder(output_dim=latent_dim, freeze=True).to(device)
+            self.encoder = ResNetV1Encoder(output_dim=latent_dim, freeze=freeze_encoder).to(device)
         else:
             self.encoder = encoder.to(device)
-        self.encoder.eval()
+            for param in self.encoder.parameters():
+                param.requires_grad = not freeze_encoder
+        self.freeze_encoder = freeze_encoder
+        if freeze_encoder:
+            self.encoder.eval()
+        else:
+            self.encoder.train()
 
         if normalize_images is None:
             normalize_images = isinstance(self.encoder, ResNetV1Encoder)
@@ -83,6 +90,12 @@ class LiberoAdapter:
         # ImageNet normalization for ResNet backbones.
         self._image_mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
         self._image_std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
+        logger.info(
+            "LiberoAdapter initialized: encoder=%s freeze_encoder=%s normalize_images=%s",
+            type(self.encoder).__name__,
+            self.freeze_encoder,
+            self.normalize_images,
+        )
 
     def _find_image_key(self, obs: dict, target: str) -> str | None:
         """Find the actual key in obs that maps to target."""
@@ -208,9 +221,12 @@ class LiberoAdapter:
             image1 = (image1.float() - self._image_mean) / self._image_std
             image2 = (image2.float() - self._image_mean) / self._image_std
 
-        with torch.no_grad():
-            # Stack cameras: (B, 2, C, H, W)
-            images = torch.stack([image1, image2], dim=1)
+        # Stack cameras: (B, 2, C, H, W)
+        images = torch.stack([image1, image2], dim=1)
+        if self.freeze_encoder:
+            with torch.no_grad():
+                visual_latent = self.encoder(images)  # (B, 2 * latent_dim)
+        else:
             visual_latent = self.encoder(images)  # (B, 2 * latent_dim)
 
         # 2. Proprioception

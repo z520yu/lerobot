@@ -165,7 +165,8 @@ class SACResidualTrainer:
         self.policy.load_state_dict(checkpoint["policy"])
         self.critic.load_state_dict(checkpoint["critic"])
         self.target_critic.load_state_dict(checkpoint["target_critic"])
-        self.log_alpha = checkpoint["log_alpha"]
+        # Keep the same Parameter object so the optimizer still points to it.
+        self.log_alpha.data.copy_(checkpoint["log_alpha"].to(self.device))
         self.actor_optimizer.load_state_dict(checkpoint["actor_optimizer"])
         self.critic_optimizer.load_state_dict(checkpoint["critic_optimizer"])
         self.alpha_optimizer.load_state_dict(checkpoint["alpha_optimizer"])
