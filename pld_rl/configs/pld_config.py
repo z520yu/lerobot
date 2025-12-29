@@ -14,14 +14,14 @@ class PLDConfig:
     # === Base Policy ===
     base_policy_path: str | Path = "./outputs/pi05_base_sft"
     base_chunk_size: int = 50
-    base_n_action_steps: int = 50
+    base_n_action_steps: int = 10  # Match lerobot-eval default (not 50!)
 
     # === Environment ===
     env_name: str = "libero_10"
     task_id: int = 0
     env_max_steps: int = 500
     action_dim: int = 7
-    state_dim: int = 9  # pos:3 + quat:4 + gripper:2
+    state_dim: int = 8  # pos:3 + axis_angle:3 + gripper:2 (lerobot convention)
 
     # === Residual Policy ===
     residual_hidden_dims: list[int] = field(default_factory=lambda: [256, 256])

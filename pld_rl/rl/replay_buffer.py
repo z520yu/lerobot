@@ -13,6 +13,7 @@ class Transition:
     obs: np.ndarray
     action: np.ndarray
     base_action: np.ndarray
+    next_base_action: np.ndarray
     reward: float
     next_obs: np.ndarray
     done: bool
@@ -115,6 +116,10 @@ class HybridReplayBuffer:
             ),
             "base_action": torch.tensor(
                 np.stack([t.base_action for t in transitions]),
+                dtype=torch.float32
+            ),
+            "next_base_action": torch.tensor(
+                np.stack([t.next_base_action for t in transitions]),
                 dtype=torch.float32
             ),
             "reward": torch.tensor(

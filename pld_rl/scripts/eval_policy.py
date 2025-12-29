@@ -27,6 +27,7 @@ from pld_rl.policies.residual_gaussian import ResidualGaussianPolicy
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
+    force=True,
 )
 logger = logging.getLogger(__name__)
 
@@ -280,7 +281,6 @@ def main():
             hidden_dims=config.residual_hidden_dims,
             device=config.device,
         )
-
         if args.xi_sweep:
             # Sweep over xi values
             xi_values = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
@@ -332,6 +332,10 @@ def main():
         with open(output_path, "w") as f:
             json.dump(all_results, f, indent=2)
         logger.info(f"Results saved to {output_path}")
+
+    # Always print results for visibility even if logging is suppressed.
+    print("\nEVAL_RESULTS")
+    print(json.dumps(all_results, indent=2))
 
     logger.info("Done!")
 

@@ -51,6 +51,7 @@ class LiberoAdapter:
         state_dim: int = 9,
         image_key_mapping: dict[str, str] | None = None,
         single_camera: bool = False,
+        normalize_images: bool | None = None,
     ):
         """
         Args:
@@ -75,6 +76,13 @@ class LiberoAdapter:
         else:
             self.encoder = encoder.to(device)
         self.encoder.eval()
+
+        if normalize_images is None:
+            normalize_images = isinstance(self.encoder, ResNetV1Encoder)
+        self.normalize_images = normalize_images
+        # ImageNet normalization for ResNet backbones.
+        self._image_mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
+        self._image_std = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
 
     def _find_image_key(self, obs: dict, target: str) -> str | None:
         """Find the actual key in obs that maps to target."""
@@ -195,6 +203,10 @@ class LiberoAdapter:
             image2 = image1.clone()
         else:
             raise ValueError(f"Could not find secondary image in batch. Keys: {list(batch.keys())}")
+
+        if self.normalize_images:
+            image1 = (image1.float() - self._image_mean) / self._image_std
+            image2 = (image2.float() - self._image_mean) / self._image_std
 
         with torch.no_grad():
             # Stack cameras: (B, 2, C, H, W)

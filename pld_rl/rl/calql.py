@@ -51,6 +51,7 @@ class CalQLPretrainer:
         obs = batch["obs"].to(self.device)
         action = batch["action"].to(self.device)
         base_action = batch["base_action"].to(self.device)
+        next_base_action = batch.get("next_base_action", base_action).to(self.device)
         reward = batch["reward"].to(self.device)
         next_obs = batch["next_obs"].to(self.device)
         done = batch["done"].to(self.device)
@@ -59,8 +60,8 @@ class CalQLPretrainer:
 
         # === TD Loss ===
         with torch.no_grad():
-            next_delta, _, _ = self.policy(next_obs, base_action)
-            next_action = torch.clamp(base_action + xi * next_delta, -1, 1)
+            next_delta, _, _ = self.policy(next_obs, next_base_action)
+            next_action = torch.clamp(next_base_action + xi * next_delta, -1, 1)
             target_q1, target_q2 = self.critic(next_obs, next_action)
             target_q = torch.min(target_q1, target_q2)
             target_value = reward + (1 - done) * self.config.discount * target_q

@@ -63,12 +63,15 @@ class LiberoGymnasiumWrapper(gym.Env):
                 low=0, high=1, shape=(3, 224, 224), dtype=np.float32
             ),
             "observation.state": gym.spaces.Box(
-                low=-np.inf, high=np.inf, shape=(9,), dtype=np.float32
+                low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32
             ),
         })
 
     def _normalize_obs(self, obs: dict) -> dict:
-        """Normalize observation keys to standard format."""
+        """Normalize observation keys to standard format.
+
+        Reference: lerobot/src/lerobot/processor/env_processor.py (LiberoProcessorStep)
+        """
         normalized = {}
 
         # Image key mapping
@@ -88,16 +91,29 @@ class LiberoGymnasiumWrapper(gym.Env):
                         img = img.astype(np.float32) / 255.0
                     if img.ndim == 3 and img.shape[-1] == 3:
                         img = np.transpose(img, (2, 0, 1))
+                    # Flip 180 degrees (flip H and W) - lerobot convention for LIBERO
+                    img = np.flip(img, axis=(1, 2)).copy()
                 normalized[dst_key] = img
 
         # State: concatenate robot state components
-        state_parts = []
-        for key in ["robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos"]:
-            if key in obs:
-                state_parts.append(np.asarray(obs[key]).flatten())
+        # Reference: lerobot uses eef_pos(3) + axis_angle(3) + gripper_qpos(2) = 8
+        eef_pos = obs.get("robot0_eef_pos")
+        eef_quat = obs.get("robot0_eef_quat")
+        gripper_qpos = obs.get("robot0_gripper_qpos")
 
-        if state_parts:
-            normalized["observation.state"] = np.concatenate(state_parts).astype(np.float32)
+        if eef_pos is not None and eef_quat is not None and gripper_qpos is not None:
+            eef_pos = np.asarray(eef_pos).flatten()
+            eef_quat = np.asarray(eef_quat).flatten()
+            gripper_qpos = np.asarray(gripper_qpos).flatten()
+
+            # Convert quaternion to axis-angle (lerobot convention)
+            axis_angle = self._quat2axisangle(eef_quat)
+
+            normalized["observation.state"] = np.concatenate([
+                eef_pos,      # (3,)
+                axis_angle,   # (3,)
+                gripper_qpos, # (2,)
+            ]).astype(np.float32)
         elif "observation.state" in obs:
             normalized["observation.state"] = obs["observation.state"]
 
@@ -107,6 +123,29 @@ class LiberoGymnasiumWrapper(gym.Env):
                 normalized[key] = obs[key]
 
         return normalized
+
+    def _quat2axisangle(self, quat: np.ndarray) -> np.ndarray:
+        """
+        Convert quaternion to axis-angle format.
+
+        Reference: lerobot/src/lerobot/processor/env_processor.py
+
+        Args:
+            quat: (4,) quaternion in (x, y, z, w) format
+
+        Returns:
+            (3,) axis-angle vector
+        """
+        quat = np.asarray(quat, dtype=np.float32)
+        w = np.clip(quat[3], -1.0, 1.0)
+        den = np.sqrt(np.maximum(1.0 - w * w, 0.0))
+
+        if den > 1e-10:
+            angle = 2.0 * np.arccos(w)
+            axis = quat[:3] / den
+            return axis * angle
+        else:
+            return np.zeros(3, dtype=np.float32)
 
     def reset(self, **kwargs) -> tuple[dict, dict]:
         """Reset environment (Gymnasium API)."""
@@ -142,11 +181,26 @@ class LiberoGymnasiumWrapper(gym.Env):
         if len(result) == 4:
             # Old Gym API
             obs, reward, done, info = result
-            terminated = done and info.get("success", False)
-            truncated = done and not info.get("success", False)
         else:
             # New Gymnasium API
-            obs, reward, terminated, truncated, info = result
+            obs, reward, _, _, info = result
+            done = False
+
+        # Check success using LIBERO's check_success() method
+        # Reference: lerobot/src/lerobot/envs/libero.py line 311
+        is_success = False
+        if hasattr(self._env, 'check_success'):
+            is_success = self._env.check_success()
+        elif "success" in info:
+            is_success = info["success"]
+
+        # Update info with is_success (lerobot convention)
+        info["is_success"] = is_success
+        info["success"] = is_success  # Keep for backwards compatibility
+
+        # Determine terminated/truncated
+        terminated = done or is_success
+        truncated = False
 
         # Check for max steps truncation
         if self._step_count >= self.max_episode_steps and not terminated:
@@ -267,7 +321,7 @@ class DummyLiberoEnv(gym.Env):
         self,
         max_episode_steps: int = 500,
         obs_image_shape: tuple[int, int, int] = (3, 224, 224),
-        state_dim: int = 9,
+        state_dim: int = 8,  # lerobot convention: pos:3 + axis_angle:3 + gripper:2
         action_dim: int = 7,
         success_prob: float = 0.1,
     ):

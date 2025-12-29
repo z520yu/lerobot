@@ -21,7 +21,7 @@ class PI05BaseWrapper:
     - Loading and freezing PI05 model
     - Action chunking cache management
     - Observation preprocessing with proper tokenization
-    - Dataset stats loading for normalization
+    - Loading preprocessor/postprocessor from pretrained model (like lerobot-eval)
     """
 
     def __init__(
@@ -30,7 +30,7 @@ class PI05BaseWrapper:
         dataset_stats: dict[str, Any] | None = None,
         device: str = "cuda",
         chunk_size: int = 50,
-        n_action_steps: int = 50,
+        n_action_steps: int = 10,  # Match lerobot-eval default (10, not 50!)
     ):
         self.device = device
         self.chunk_size = chunk_size
@@ -49,7 +49,7 @@ class PI05BaseWrapper:
         checkpoint_path: str | Path,
         dataset_stats: dict[str, Any] | None,
     ):
-        """Load and freeze PI05 model."""
+        """Load and freeze PI05 model with preprocessor/postprocessor."""
         checkpoint_path = Path(checkpoint_path)
 
         # Load policy
@@ -69,29 +69,12 @@ class PI05BaseWrapper:
 
         # Update chunk settings from config
         self.chunk_size = self.config.chunk_size
-        self.n_action_steps = self.config.n_action_steps
+        # Don't override n_action_steps from config - use the value passed in constructor
+        # (lerobot-eval uses 10, not the config's default which might be 50)
 
-        # Try to load dataset_stats from checkpoint if not provided
-        if dataset_stats is None:
-            dataset_stats = self._load_dataset_stats(checkpoint_path)
-
-        # Create processors
-        if dataset_stats is not None:
-            try:
-                from lerobot.policies.pi05.processor_pi05 import make_pi05_pre_post_processors
-                self.preprocessor, self.postprocessor = make_pi05_pre_post_processors(
-                    self.config,
-                    dataset_stats=dataset_stats,
-                )
-                logger.info("Created PI05 preprocessor and postprocessor with dataset_stats")
-            except Exception as e:
-                logger.warning(f"Failed to create processors: {e}. Using manual processing.")
-                self.preprocessor = None
-                self.postprocessor = None
-        else:
-            logger.warning("No dataset_stats available. Actions may not be properly normalized.")
-            self.preprocessor = None
-            self.postprocessor = None
+        # Try to load preprocessor and postprocessor from pretrained model
+        # This is exactly how lerobot-eval loads them
+        self._load_processors_from_pretrained(checkpoint_path)
 
         # Get actual action dimension from config
         self._actual_action_dim = None
@@ -103,6 +86,66 @@ class PI05BaseWrapper:
         logger.info(f"Loaded PI05 policy from {checkpoint_path}")
         logger.info(f"  chunk_size={self.chunk_size}, n_action_steps={self.n_action_steps}")
         logger.info(f"  action_dim={self._actual_action_dim}")
+
+    def _load_processors_from_pretrained(self, checkpoint_path: Path):
+        """
+        Load preprocessor and postprocessor from pretrained model.
+
+        This matches how lerobot-eval loads processors:
+        - Loads from policy_preprocessor.json and policy_postprocessor.json
+        - These files contain the dataset_stats embedded in them
+        """
+        try:
+            from lerobot.processor import PolicyProcessorPipeline
+            from lerobot.processor.converters import (
+                batch_to_transition,
+                transition_to_batch,
+                policy_action_to_transition,
+                transition_to_policy_action,
+            )
+            from lerobot.utils.constants import (
+                POLICY_PREPROCESSOR_DEFAULT_NAME,
+                POLICY_POSTPROCESSOR_DEFAULT_NAME,
+            )
+
+            preprocessor_config = checkpoint_path / f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json"
+            postprocessor_config = checkpoint_path / f"{POLICY_POSTPROCESSOR_DEFAULT_NAME}.json"
+
+            if preprocessor_config.exists() and postprocessor_config.exists():
+                # Load preprocessor
+                self.preprocessor = PolicyProcessorPipeline.from_pretrained(
+                    pretrained_model_name_or_path=str(checkpoint_path),
+                    config_filename=f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json",
+                    overrides={"device_processor": {"device": str(self.device)}},
+                    to_transition=batch_to_transition,
+                    to_output=transition_to_batch,
+                )
+
+                # Load postprocessor
+                self.postprocessor = PolicyProcessorPipeline.from_pretrained(
+                    pretrained_model_name_or_path=str(checkpoint_path),
+                    config_filename=f"{POLICY_POSTPROCESSOR_DEFAULT_NAME}.json",
+                    overrides={},
+                    to_transition=policy_action_to_transition,
+                    to_output=transition_to_policy_action,
+                )
+
+                logger.info("Loaded preprocessor and postprocessor from pretrained model")
+                logger.info(f"  preprocessor: {preprocessor_config}")
+                logger.info(f"  postprocessor: {postprocessor_config}")
+            else:
+                logger.warning(f"Processor configs not found in {checkpoint_path}")
+                logger.warning("  Will use manual preprocessing (may have normalization issues!)")
+                self.preprocessor = None
+                self.postprocessor = None
+
+        except Exception as e:
+            logger.warning(f"Failed to load processors from pretrained: {e}")
+            logger.warning("Falling back to manual preprocessing")
+            import traceback
+            traceback.print_exc()
+            self.preprocessor = None
+            self.postprocessor = None
 
     def _load_dataset_stats(self, checkpoint_path: Path) -> dict[str, Any] | None:
         """Try to load dataset_stats from checkpoint directory."""
@@ -224,12 +267,25 @@ class PI05BaseWrapper:
                 action_chunk = action.unsqueeze(0)
 
         # Postprocess if available (handles unnormalization)
+        # PolicyAction is just torch.Tensor, not a dict!
         if self.postprocessor is not None:
             try:
-                processed = self.postprocessor({"action": action_chunk.unsqueeze(0)})
-                action_chunk = processed["action"].squeeze(0)
+                # Postprocessor expects (batch, chunk_size, action_dim) tensor
+                action_tensor = action_chunk.unsqueeze(0)  # (1, chunk_size, action_dim)
+                logger.debug(f"Postprocessor input shape: {action_tensor.shape}, type: {type(action_tensor)}")
+                processed = self.postprocessor(action_tensor)
+                logger.debug(f"Postprocessor output type: {type(processed)}")
+                # Result is also a tensor
+                if isinstance(processed, dict) and "action" in processed:
+                    action_chunk = processed["action"].squeeze(0)
+                elif isinstance(processed, torch.Tensor):
+                    action_chunk = processed.squeeze(0)
+                else:
+                    logger.warning(f"Unexpected postprocessor output type: {type(processed)}")
             except Exception as e:
                 logger.warning(f"Postprocessor failed: {e}")
+                import traceback
+                traceback.print_exc()
 
         # Truncate to actual action dimension
         if self._actual_action_dim and action_chunk.shape[-1] > self._actual_action_dim:

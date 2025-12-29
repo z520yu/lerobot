@@ -44,6 +44,27 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
+def _next_base_action_and_source(
+    base_wrapper: PI05BaseWrapper,
+    adapter: LiberoAdapter,
+    next_obs: dict,
+    task_text_ep: str,
+    done: bool,
+    base_action: np.ndarray,
+) -> tuple[np.ndarray, str]:
+    if done:
+        return base_action.copy(), "base_copy"
+
+    will_refill = (
+        base_wrapper.action_cache is None
+        or base_wrapper.cache_step >= base_wrapper.n_action_steps
+    )
+    next_batch = adapter.env_obs_to_batch(next_obs, task_text_ep)
+    next_base_action = base_wrapper.act(next_batch)
+    source = "chunk_refill" if will_refill else "chunk_cached"
+    return next_base_action, source
+
+
 def collect_offline_data(
     env,
     base_wrapper: PI05BaseWrapper,
@@ -80,48 +101,67 @@ def collect_offline_data(
         base_wrapper.reset(task_text_ep)
 
         trajectory = []
+        source_counts = {"base_copy": 0, "chunk_cached": 0, "chunk_refill": 0}
+
+        # Precompute base action for the initial observation to avoid double action consumption.
+        batch = adapter.env_obs_to_batch(obs, task_text_ep)
+        base_action = base_wrapper.act(batch)
 
         for t in range(config.env_max_steps):
-            # Convert observation for base policy
-            batch = adapter.env_obs_to_batch(obs, task_text_ep)
-
-            # Get base action
-            base_action = base_wrapper.act(batch)
-
-            # Step environment
-            next_obs, reward, terminated, truncated, info = env.step(base_action)
-            done = terminated or truncated
-
             # Convert observations to RL latent
             obs_rl = adapter.single_obs_to_rl_latent(obs)
+
+            exec_action = base_action
+            next_obs, reward, terminated, truncated, info = env.step(exec_action)
+            done = terminated or truncated
+
             next_obs_rl = adapter.single_obs_to_rl_latent(next_obs)
+
+            next_base_action, source = _next_base_action_and_source(
+                base_wrapper, adapter, next_obs, task_text_ep, done, base_action
+            )
+            source_counts[source] += 1
 
             trajectory.append(Transition(
                 obs=obs_rl,
-                action=base_action.copy(),
+                action=exec_action.copy(),
                 base_action=base_action.copy(),
+                next_base_action=next_base_action.copy(),
                 reward=reward,
                 next_obs=next_obs_rl,
                 done=done,
             ))
 
             obs = next_obs
+            base_action = next_base_action
             if done:
                 break
 
         episode_count += 1
+        is_success = info.get("success", False)
+
+        if config.log_freq > 0 and episode_count % config.log_freq == 0:
+            logger.info(
+                "Offline next_base_action_source: base_copy=%d chunk_cached=%d chunk_refill=%d",
+                source_counts["base_copy"],
+                source_counts["chunk_cached"],
+                source_counts["chunk_refill"],
+            )
 
         # Only add successful episodes to offline buffer
-        if info.get("success", False):
+        if is_success:
             for trans in trajectory:
                 replay_buffer.add_offline(trans)
             success_count += 1
             pbar.update(len(trajectory))
-            pbar.set_postfix({
-                "success": success_count,
-                "episodes": episode_count,
-                "rate": f"{success_count/episode_count:.2%}",
-            })
+
+        # Always update postfix to show progress
+        pbar.set_postfix({
+            "success": success_count,
+            "episodes": episode_count,
+            "rate": f"{success_count/episode_count:.2%}" if episode_count > 0 else "0%",
+            "steps": len(trajectory),
+        })
 
     pbar.close()
     logger.info(f"Collected {success_count} successful episodes ({replay_buffer.offline_size} transitions)")
@@ -297,16 +337,19 @@ def train_residual_rl(
         if terminated or truncated:
             continue
 
+        # Precompute base action for the first training step.
+        env_batch = adapter.env_obs_to_batch(obs, task_text_ep)
+        base_action = base_wrapper.act(env_batch)
+
         # Get current xi
         xi = xi_scheduler.get(episode)
 
         episode_reward = 0.0
         episode_steps = 0
         losses_episode = []
+        source_counts = {"base_copy": 0, "chunk_cached": 0, "chunk_refill": 0}
 
         for t in range(config.env_max_steps - probe_steps):
-            batch = adapter.env_obs_to_batch(obs, task_text_ep)
-            base_action = base_wrapper.act(batch)
             obs_rl = adapter.single_obs_to_rl_latent(obs)
 
             if episode < config.warmup_episodes:
@@ -327,11 +370,17 @@ def train_residual_rl(
 
             next_obs_rl = adapter.single_obs_to_rl_latent(next_obs)
 
+            next_base_action, source = _next_base_action_and_source(
+                base_wrapper, adapter, next_obs, task_text_ep, done, base_action
+            )
+            source_counts[source] += 1
+
             # Add to online buffer
             replay_buffer.add_online(Transition(
                 obs=obs_rl,
                 action=exec_action.copy(),
                 base_action=base_action.copy(),
+                next_base_action=next_base_action.copy(),
                 reward=reward,
                 next_obs=next_obs_rl,
                 done=done,
@@ -349,6 +398,7 @@ def train_residual_rl(
             episode_steps += 1
             total_steps += 1
             obs = next_obs
+            base_action = next_base_action
 
             if done:
                 break
@@ -365,6 +415,15 @@ def train_residual_rl(
                 "xi": f"{xi:.3f}",
                 "q": f"{avg_losses.get('q1_mean', 0):.2f}",
             })
+
+        if config.log_freq > 0 and episode > 0 and episode % config.log_freq == 0:
+            logger.info(
+                "Episode %d next_base_action_source: base_copy=%d chunk_cached=%d chunk_refill=%d",
+                episode,
+                source_counts["base_copy"],
+                source_counts["chunk_cached"],
+                source_counts["chunk_refill"],
+            )
 
         # Evaluation
         if episode > 0 and episode % config.eval_freq == 0:
@@ -493,7 +552,6 @@ def main():
         xi_final=config.xi_final,
         warmup_episodes=config.xi_warmup_episodes,
     )
-
     # Step 4: Train residual policy
     train_residual_rl(
         env, base_wrapper, trainer, replay_buffer, adapter, xi_scheduler, config,

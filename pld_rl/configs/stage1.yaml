@@ -4,14 +4,14 @@
 # === Base Policy ===
 base_policy_path: "./outputs/pi05_base_sft"
 base_chunk_size: 50
-base_n_action_steps: 50
+base_n_action_steps: 10  # Match lerobot-eval default (not 50!)
 
 # === Environment ===
 env_name: "libero_10"
 task_id: 0
 env_max_steps: 500
 action_dim: 7
-state_dim: 9  # pos:3 + quat:4 + gripper:2
+state_dim: 8  # pos:3 + axis_angle:3 + gripper:2 (lerobot convention)
 
 # === Residual Policy ===
 residual_hidden_dims:

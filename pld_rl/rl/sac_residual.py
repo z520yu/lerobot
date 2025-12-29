@@ -82,8 +82,8 @@ class SACResidualTrainer:
 
         # === Critic Update ===
         with torch.no_grad():
-            # Use current base action as approximation for next base action
-            next_base_action = base_action
+            # Prefer stored next_base_action when available to avoid target bias.
+            next_base_action = batch.get("next_base_action", base_action).to(self.device)
 
             next_delta, next_log_prob, _ = self.policy(next_obs, next_base_action)
             next_action = torch.clamp(next_base_action + xi * next_delta, -1, 1)
