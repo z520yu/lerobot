@@ -32,11 +32,11 @@ class SACResidualTrainer:
         self.target_critic.load_state_dict(self.critic.state_dict())
 
         # Optimizers
-        self.actor_optimizer = torch.optim.Adam(
-            self.policy.parameters(), lr=config.actor_lr
+        self.actor_optimizer = torch.optim.AdamW(
+            self.policy.parameters(), lr=config.actor_lr, weight_decay=0.0
         )
-        self.critic_optimizer = torch.optim.Adam(
-            self.critic.parameters(), lr=config.critic_lr
+        self.critic_optimizer = torch.optim.AdamW(
+            self.critic.parameters(), lr=config.critic_lr, weight_decay=0.0
         )
 
         # Temperature parameter (learnable)
@@ -45,7 +45,9 @@ class SACResidualTrainer:
             requires_grad=True,
             device=device
         )
-        self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=config.actor_lr)
+        self.alpha_optimizer = torch.optim.AdamW(
+            [self.log_alpha], lr=config.temperature_lr, weight_decay=0.0
+        )
 
         self.target_entropy = config.target_entropy
 
@@ -83,10 +85,18 @@ class SACResidualTrainer:
         # === Critic Update ===
         with torch.no_grad():
             # Prefer stored next_base_action when available to avoid target bias.
-            next_base_action = batch.get("next_base_action", base_action).to(self.device)
+            if "next_base_action" in batch:
+                next_base_action = batch["next_base_action"].to(self.device)
+            else:
+                print(
+                    "Warning: missing next_base_action in batch; falling back to base_action. "
+                    "Targets may be biased."
+                )
+                next_base_action = base_action
 
-            next_delta, next_log_prob, _ = self.policy(next_obs, next_base_action)
-            next_action = torch.clamp(next_base_action + xi * next_delta, -1, 1)
+            next_delta_raw, next_log_prob_raw, _ = self.policy(next_obs, next_base_action)
+            next_action = self.policy.compose_action(next_base_action, next_delta_raw, xi)
+            next_log_prob = self.policy.log_prob_action(next_log_prob_raw, next_action, xi)
 
             target_q1, target_q2 = self.target_critic(next_obs, next_action)
             target_q = torch.min(target_q1, target_q2)
@@ -98,6 +108,9 @@ class SACResidualTrainer:
 
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            self.critic.parameters(), self.config.grad_clip_norm
+        )
         self.critic_optimizer.step()
 
         losses = {
@@ -108,18 +121,31 @@ class SACResidualTrainer:
 
         # === Actor Update ===
         if update_actor:
-            delta, log_prob, _ = self.policy(obs, base_action)
-            new_action = torch.clamp(base_action + xi * delta, -1, 1)
+            delta_raw, log_prob_raw, _ = self.policy(obs, base_action)
+            new_action = self.policy.compose_action(base_action, delta_raw, xi)
+            log_prob = self.policy.log_prob_action(log_prob_raw, new_action, xi)
             q_new = self.critic.q_min(obs, new_action)
 
             actor_loss = (self.alpha.detach() * log_prob - q_new).mean()
 
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                self.policy.parameters(), self.config.grad_clip_norm
+            )
             self.actor_optimizer.step()
 
             # === Temperature Update ===
-            alpha_loss = -(self.log_alpha * (log_prob.detach() + self.target_entropy)).mean()
+            # Adjust target entropy to cancel xi scaling in log_prob_action.
+            xi_tensor = torch.as_tensor(xi, device=log_prob.device, dtype=log_prob.dtype)
+            target_entropy = torch.as_tensor(
+                self.target_entropy, device=log_prob.device, dtype=log_prob.dtype
+            )
+            eps = self.policy._TANH_EPS
+            target_entropy = target_entropy + self.policy.action_dim * torch.log(
+                torch.clamp(xi_tensor, min=eps)
+            )
+            alpha_loss = -(self.log_alpha * (log_prob.detach() + target_entropy)).mean()
 
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()

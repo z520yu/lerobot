@@ -26,7 +26,7 @@ from pld_rl.rl.calql import CalQLPretrainer
 from pld_rl.rl.critics import DoubleQCritic
 from pld_rl.rl.replay_buffer import HybridReplayBuffer, Transition
 from pld_rl.rl.sac_residual import SACResidualTrainer
-from pld_rl.rl.schedules import XiScheduler
+from pld_rl.rl.schedules import CosineXiScheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,6 +76,33 @@ def _next_base_action_and_source(
     next_base_action = base_wrapper.act(next_batch)
     source = "chunk_refill" if will_refill else "chunk_cached"
     return next_base_action, source
+
+
+def _run_probe_steps(
+    env,
+    base_wrapper: PI05BaseWrapper,
+    adapter: LiberoAdapter,
+    obs: dict,
+    task_text_ep: str,
+    probe_max_steps: int,
+) -> tuple[dict, int, bool, bool]:
+    if probe_max_steps <= 0:
+        return obs, 0, False, False
+
+    probe_steps = np.random.randint(0, probe_max_steps + 1)
+    steps_done = 0
+    terminated = False
+    truncated = False
+
+    for _ in range(probe_steps):
+        batch = adapter.env_obs_to_batch(obs, task_text_ep)
+        base_action = base_wrapper.act(batch)
+        obs, _, terminated, truncated, _ = env.step(base_action)
+        steps_done += 1
+        if terminated or truncated:
+            break
+
+    return obs, steps_done, terminated, truncated
 
 
 def collect_offline_data(
@@ -192,6 +219,7 @@ def collect_offline_data(
 
 def pretrain_critic_calql(
     critic: DoubleQCritic,
+    target_critic: DoubleQCritic,
     residual_policy: ResidualGaussianPolicy,
     replay_buffer: HybridReplayBuffer,
     config: PLDConfig,
@@ -201,6 +229,7 @@ def pretrain_critic_calql(
 
     Args:
         critic: Q-networks
+        target_critic: target Q-networks
         residual_policy: residual policy (for target computation)
         replay_buffer: offline buffer
         config: configuration
@@ -210,15 +239,23 @@ def pretrain_critic_calql(
     """
     logger.info(f"Pretraining critic with Cal-QL for {config.calql_pretrain_steps} steps...")
 
-    calql = CalQLPretrainer(critic, residual_policy, config, device=config.device)
+    calql = CalQLPretrainer(
+        critic, target_critic, residual_policy, config, device=config.device
+    )
 
     log_every = max(100, config.calql_pretrain_steps // 10)
     pbar = tqdm(range(config.calql_pretrain_steps), desc="Cal-QL pretraining")
-    losses_avg = {"td_loss": 0.0, "cql_loss": 0.0, "total_loss": 0.0}
+    losses_avg = {"td_loss": 0.0, "calql_loss": 0.0, "total_loss": 0.0}
 
     for step in pbar:
         batch = replay_buffer.sample_offline(config.batch_size)
-        losses = calql.pretrain_step(batch, xi=config.xi_init)
+        losses = calql.pretrain_step(
+            batch,
+            td_xi=config.calql_td_xi,
+            conservative_xi=config.calql_conservative_xi,
+            num_policy_actions=config.calql_num_policy_actions,
+            calql_alpha=config.calql_alpha,
+        )
 
         # Update averages
         for k, v in losses.items():
@@ -228,11 +265,11 @@ def pretrain_critic_calql(
             pbar.set_postfix({k: f"{v:.4f}" for k, v in losses_avg.items()})
         if step % log_every == 0 or step == config.calql_pretrain_steps - 1:
             logger.info(
-                "Cal-QL step %d/%d td=%.4f cql=%.4f total=%.4f q1=%.2f q2=%.2f",
+                "Cal-QL step %d/%d td=%.4f calql=%.4f total=%.4f q1=%.2f q2=%.2f",
                 step + 1,
                 config.calql_pretrain_steps,
                 losses_avg.get("td_loss", float("nan")),
-                losses_avg.get("cql_loss", float("nan")),
+                losses_avg.get("calql_loss", float("nan")),
                 losses_avg.get("total_loss", float("nan")),
                 losses.get("q1_mean", float("nan")),
                 losses.get("q2_mean", float("nan")),
@@ -249,6 +286,7 @@ def evaluate_policy(
     adapter: LiberoAdapter,
     config: PLDConfig,
     xi: float,
+    probe_max_steps: int = 0,
     num_episodes: int = 10,
     task_text: str = "",
 ) -> dict:
@@ -262,6 +300,7 @@ def evaluate_policy(
         adapter: observation adapter
         config: configuration
         xi: residual scale
+        probe_max_steps: max base-only probe steps before evaluation
         num_episodes: number of evaluation episodes
         task_text: task description
 
@@ -269,20 +308,36 @@ def evaluate_policy(
         Evaluation metrics
     """
     residual_policy.eval()
+    encoder = getattr(adapter, "encoder", None)
+    encoder_was_training = False
+    if isinstance(encoder, torch.nn.Module):
+        encoder_was_training = encoder.training
+        encoder.eval()
 
     successes = []
     episode_lengths = []
     total_rewards = []
+    probe_steps_all = []
 
-    for _ in range(num_episodes):
+    probe_max_steps = min(probe_max_steps, config.env_max_steps)
+
+    while len(successes) < num_episodes:
         obs, info = env.reset()
         task_text_ep = info.get("task", task_text)
         base_wrapper.reset(task_text_ep)
 
+        probe_steps = 0
+        if probe_max_steps > 0:
+            obs, probe_steps, terminated, truncated = _run_probe_steps(
+                env, base_wrapper, adapter, obs, task_text_ep, probe_max_steps
+            )
+            if terminated or truncated:
+                continue
+
         episode_reward = 0.0
         episode_length = 0
 
-        for t in range(config.env_max_steps):
+        for t in range(config.env_max_steps - probe_steps):
             batch = adapter.env_obs_to_batch(obs, task_text_ep)
             base_action = base_wrapper.act(batch)
 
@@ -291,10 +346,10 @@ def evaluate_policy(
             obs_tensor = torch.tensor(obs_rl, dtype=torch.float32, device=config.device)
             base_tensor = torch.tensor(base_action, dtype=torch.float32, device=config.device)
 
-            delta = residual_policy.get_action(obs_tensor, base_tensor, deterministic=True)
-            delta = delta.cpu().numpy()
-
-            exec_action = np.clip(base_action + xi * delta, -1, 1)
+            action = residual_policy.get_action(
+                obs_tensor, base_tensor, xi=xi, deterministic=True
+            )
+            exec_action = action.cpu().numpy()
 
             next_obs, reward, terminated, truncated, info = env.step(exec_action)
             done = terminated or truncated
@@ -309,14 +364,22 @@ def evaluate_policy(
         successes.append(float(info.get("success", False)))
         episode_lengths.append(episode_length)
         total_rewards.append(episode_reward)
+        if probe_max_steps > 0:
+            probe_steps_all.append(probe_steps)
 
     residual_policy.train()
+    if isinstance(encoder, torch.nn.Module) and encoder_was_training:
+        encoder.train()
 
-    return {
+    metrics = {
         "success_rate": np.mean(successes),
         "mean_episode_length": np.mean(episode_lengths),
         "mean_reward": np.mean(total_rewards),
     }
+    if probe_max_steps > 0:
+        metrics["probe_max_steps"] = probe_max_steps
+        metrics["mean_probe_steps"] = float(np.mean(probe_steps_all)) if probe_steps_all else 0.0
+    return metrics
 
 
 def train_residual_rl(
@@ -325,7 +388,7 @@ def train_residual_rl(
     trainer: SACResidualTrainer,
     replay_buffer: HybridReplayBuffer,
     adapter: LiberoAdapter,
-    xi_scheduler: XiScheduler,
+    xi_scheduler: CosineXiScheduler,
     config: PLDConfig,
     task_text: str = "",
 ):
@@ -399,10 +462,10 @@ def train_residual_rl(
                 obs_tensor = torch.tensor(obs_rl, dtype=torch.float32, device=config.device)
                 base_tensor = torch.tensor(base_action, dtype=torch.float32, device=config.device)
 
-                delta = trainer.policy.get_action(obs_tensor, base_tensor, deterministic=False)
-                delta = delta.cpu().numpy()
-
-                exec_action = np.clip(base_action + xi * delta, -1, 1)
+                action = trainer.policy.get_action(
+                    obs_tensor, base_tensor, xi=xi, deterministic=False
+                )
+                exec_action = action.cpu().numpy()
 
             next_obs, reward, terminated, truncated, info = env.step(exec_action)
             done = terminated or truncated
@@ -414,7 +477,7 @@ def train_residual_rl(
             )
             source_counts[source] += 1
 
-            # Add to online buffer
+            # Add online transition (probe steps are excluded earlier).
             replay_buffer.add_online(Transition(
                 obs=obs_rl,
                 action=exec_action.copy(),
@@ -425,8 +488,8 @@ def train_residual_rl(
                 done=done,
             ))
 
-            # SAC updates
-            if replay_buffer.can_sample(config.batch_size):
+            # SAC updates (skip during warmup)
+            if episode >= config.warmup_episodes and replay_buffer.can_sample(config.batch_size):
                 for update_idx in range(config.critic_actor_update_ratio):
                     batch = replay_buffer.sample(config.batch_size)
                     update_actor = (update_idx == config.critic_actor_update_ratio - 1)
@@ -482,7 +545,8 @@ def train_residual_rl(
             eval_xi = 0.0 if is_warmup_eval else xi
             eval_metrics = evaluate_policy(
                 env, base_wrapper, trainer.policy, adapter,
-                config, eval_xi, num_episodes=10, task_text=task_text,
+                config, eval_xi, probe_max_steps=config.eval_probe_max_steps,
+                num_episodes=10, task_text=task_text,
             )
             warmup_tag = " (warmup eval)" if is_warmup_eval else ""
             logger.info(f"Episode {episode} - Eval{warmup_tag}: {eval_metrics}")
@@ -543,7 +607,27 @@ def main():
 
     # Create adapter
     if config.use_latent_encoder:
+        encoder = None
+        if config.encoder_type == "serl_resnet10":
+            from pld_rl.rl.serl_resnet10 import SERLResNet10Config, SERLResNet10Encoder
+
+            encoder_cfg = SERLResNet10Config(
+                image_size=config.serl_resnet10_image_size,
+                num_spatial_blocks=config.serl_resnet10_num_spatial_blocks,
+                bottleneck_dim=config.latent_dim,
+            )
+            encoder = SERLResNet10Encoder(
+                config=encoder_cfg,
+                freeze_backbone=config.freeze_encoder,
+                pretrained=True,
+                weights_path=config.serl_resnet10_weights,
+                auto_download=config.serl_resnet10_auto_download,
+                log_weight_keys=config.serl_resnet10_log_keys,
+                device=config.device,
+            )
+
         adapter = LiberoAdapter(
+            encoder=encoder,
             device=config.device,
             latent_dim=config.latent_dim,
             state_dim=config.state_dim,
@@ -600,7 +684,7 @@ def main():
 
     # Step 2: Pretrain critic with Cal-QL
     pretrain_critic_calql(
-        critic, residual_policy, replay_buffer, config,
+        critic, target_critic, residual_policy, replay_buffer, config,
     )
 
     # Step 3: Create trainer and xi scheduler
@@ -612,7 +696,7 @@ def main():
         device=config.device,
     )
 
-    xi_scheduler = XiScheduler(
+    xi_scheduler = CosineXiScheduler(
         xi_init=config.xi_init,
         xi_final=config.xi_final,
         warmup_episodes=config.xi_warmup_episodes,

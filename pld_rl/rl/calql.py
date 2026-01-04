@@ -9,22 +9,26 @@ from pld_rl.rl.critics import DoubleQCritic
 
 
 class CalQLPretrainer:
-    """Cal-QL style critic pretraining with conservative regularization."""
+    """Cal-QL critic pretraining with calibrated conservative regularization."""
 
     def __init__(
         self,
         critic: DoubleQCritic,
+        target_critic: DoubleQCritic,
         residual_policy: ResidualGaussianPolicy,
         config: PLDConfig,
         device: str = "cuda",
     ):
         self.critic = critic.to(device)
+        self.target_critic = target_critic.to(device)
         self.policy = residual_policy.to(device)
         self.device = device
         self.config = config
 
-        self.optimizer = torch.optim.Adam(
-            self.critic.parameters(), lr=config.critic_lr
+        self.target_critic.load_state_dict(self.critic.state_dict())
+
+        self.optimizer = torch.optim.AdamW(
+            self.critic.parameters(), lr=config.critic_lr, weight_decay=0.0
         )
 
         self._step_count = 0
@@ -32,18 +36,20 @@ class CalQLPretrainer:
     def pretrain_step(
         self,
         batch: dict[str, torch.Tensor],
-        num_random_actions: int = 10,
-        cql_alpha: float = 1.0,
-        xi: float = 0.1,
+        num_policy_actions: int = 10,
+        calql_alpha: float = 1.0,
+        td_xi: float = 0.0,
+        conservative_xi: float = 0.05,
     ) -> dict[str, float]:
         """
         Cal-QL pretraining step.
 
         Args:
             batch: offline buffer batch
-            num_random_actions: number of random actions to sample for CQL
-            cql_alpha: CQL regularization coefficient
-            xi: residual scale for next action computation
+            num_policy_actions: number of policy actions to sample for Cal-QL
+            calql_alpha: Cal-QL regularization coefficient
+            td_xi: residual scale for TD target computation
+            conservative_xi: residual scale for conservative term
 
         Returns:
             losses dictionary
@@ -51,7 +57,14 @@ class CalQLPretrainer:
         obs = batch["obs"].to(self.device)
         action = batch["action"].to(self.device)
         base_action = batch["base_action"].to(self.device)
-        next_base_action = batch.get("next_base_action", base_action).to(self.device)
+        if "next_base_action" in batch:
+            next_base_action = batch["next_base_action"].to(self.device)
+        else:
+            print(
+                "Warning: missing next_base_action in batch; falling back to base_action. "
+                "Targets may be biased."
+            )
+            next_base_action = base_action
         reward = batch["reward"].to(self.device)
         next_obs = batch["next_obs"].to(self.device)
         done = batch["done"].to(self.device)
@@ -60,49 +73,57 @@ class CalQLPretrainer:
 
         # === TD Loss ===
         with torch.no_grad():
-            next_delta, _, _ = self.policy(next_obs, next_base_action)
-            next_action = torch.clamp(next_base_action + xi * next_delta, -1, 1)
-            target_q1, target_q2 = self.critic(next_obs, next_action)
+            next_delta_raw, _, _ = self.policy(next_obs, next_base_action)
+            next_action = self.policy.compose_action(next_base_action, next_delta_raw, td_xi)
+            target_q1, target_q2 = self.target_critic(next_obs, next_action)
             target_q = torch.min(target_q1, target_q2)
             target_value = reward + (1 - done) * self.config.discount * target_q
 
         q1, q2 = self.critic(obs, action)
         td_loss = F.mse_loss(q1, target_value) + F.mse_loss(q2, target_value)
 
-        # === CQL Conservative Loss ===
-        # Sample random actions
-        random_actions = torch.rand(
-            batch_size, num_random_actions, self.config.action_dim,
-            device=self.device
-        ) * 2 - 1
-
-        # Compute Q(s, random_a)
-        obs_expanded = obs.unsqueeze(1).expand(-1, num_random_actions, -1)
+        # === Cal-QL Conservative Loss ===
+        # Sample actions from current residual policy, conditioned on base_action.
+        obs_expanded = obs.unsqueeze(1).expand(-1, num_policy_actions, -1)
+        base_expanded = base_action.unsqueeze(1).expand(-1, num_policy_actions, -1)
         obs_flat = obs_expanded.reshape(-1, obs.shape[-1])
-        random_flat = random_actions.reshape(-1, self.config.action_dim)
+        base_flat = base_expanded.reshape(-1, self.config.action_dim)
+        with torch.no_grad():
+            delta_raw, _, _ = self.policy(obs_flat, base_flat)
+            policy_actions = self.policy.compose_action(base_flat, delta_raw, conservative_xi)
 
-        q1_rand, q2_rand = self.critic(obs_flat, random_flat)
-        q1_rand = q1_rand.reshape(batch_size, num_random_actions)
-        q2_rand = q2_rand.reshape(batch_size, num_random_actions)
+        q1_pi, q2_pi = self.critic(obs_flat, policy_actions)
+        q1_pi = q1_pi.reshape(batch_size, num_policy_actions)
+        q2_pi = q2_pi.reshape(batch_size, num_policy_actions)
 
-        # CQL loss: logsumexp(Q(s, random)) - Q(s, a)
-        cql_loss = (
-            torch.logsumexp(q1_rand, dim=1).mean() - q1.mean() +
-            torch.logsumexp(q2_rand, dim=1).mean() - q2.mean()
+        # Calibrate using behavior policy value V^mu(s) ~ mean target Q(s, a_data).
+        with torch.no_grad():
+            v_mu_q1, v_mu_q2 = self.target_critic(obs, action)
+            v_mu = (0.5 * (v_mu_q1 + v_mu_q2)).unsqueeze(1)
+        q1_pi = torch.maximum(q1_pi, v_mu)
+        q2_pi = torch.maximum(q2_pi, v_mu)
+
+        calql_loss = 0.5 * (
+            q1_pi.mean() - q1.mean() +
+            q2_pi.mean() - q2.mean()
         )
 
         # Total loss
-        total_loss = td_loss + cql_alpha * cql_loss
+        total_loss = td_loss + calql_alpha * calql_loss
 
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            self.critic.parameters(), self.config.grad_clip_norm
+        )
         self.optimizer.step()
+        self._soft_update_target()
 
         self._step_count += 1
 
         return {
             "td_loss": td_loss.item(),
-            "cql_loss": cql_loss.item(),
+            "calql_loss": calql_loss.item(),
             "total_loss": total_loss.item(),
             "q1_mean": q1.mean().item(),
             "q2_mean": q2.mean().item(),
@@ -111,3 +132,11 @@ class CalQLPretrainer:
     @property
     def step_count(self) -> int:
         return self._step_count
+
+    def _soft_update_target(self):
+        """EMA update of target critic."""
+        tau = self.config.tau
+        for param, target_param in zip(
+            self.critic.parameters(), self.target_critic.parameters()
+        ):
+            target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)

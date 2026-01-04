@@ -76,16 +76,23 @@ class LiberoAdapter:
             self.encoder = ResNetV1Encoder(output_dim=latent_dim, freeze=freeze_encoder).to(device)
         else:
             self.encoder = encoder.to(device)
+
+        self.freeze_encoder = freeze_encoder
+        self.encoder_handles_freeze = getattr(self.encoder, "handles_freeze", False)
+        if not self.encoder_handles_freeze:
             for param in self.encoder.parameters():
                 param.requires_grad = not freeze_encoder
-        self.freeze_encoder = freeze_encoder
-        if freeze_encoder:
-            self.encoder.eval()
+            if freeze_encoder:
+                self.encoder.eval()
+            else:
+                self.encoder.train()
         else:
             self.encoder.train()
 
         if normalize_images is None:
             normalize_images = isinstance(self.encoder, ResNetV1Encoder)
+            if getattr(self.encoder, "handles_normalization", False):
+                normalize_images = False
         self.normalize_images = normalize_images
         # ImageNet normalization for ResNet backbones.
         self._image_mean = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
@@ -223,7 +230,7 @@ class LiberoAdapter:
 
         # Stack cameras: (B, 2, C, H, W)
         images = torch.stack([image1, image2], dim=1)
-        if self.freeze_encoder:
+        if self.freeze_encoder and not self.encoder_handles_freeze:
             with torch.no_grad():
                 visual_latent = self.encoder(images)  # (B, 2 * latent_dim)
         else:

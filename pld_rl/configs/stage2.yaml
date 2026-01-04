@@ -17,18 +17,31 @@ state_dim: 8  # pos:3 + axis_angle:3 + gripper:2 (lerobot convention)
 residual_hidden_dims:
   - 256
   - 256
-residual_std_min: 0.01
-residual_std_max: 1.0
+  - 256
+residual_std_min: 1.0e-5
+residual_std_max: 5.0
+
+# === Cal-QL (unused in stage 2, kept for config parity) ===
+calql_num_policy_actions: 10
+calql_alpha: 1.0
+calql_td_xi: 0.0
+calql_conservative_xi: 0.05
 
 # === PLD Collection ===
 pld_num_episodes: 500
 pld_alpha: 0.5  # T_base ~ Uniform(0, alpha * T_max)
-xi_final: 0.5   # Final residual scale for data collection
+xi_final: 0.1   # Final residual scale for data collection
 
 # === Encoder ===
 use_latent_encoder: true
 latent_dim: 256
 freeze_encoder: true
+encoder_type: "serl_resnet10"
+serl_resnet10_weights: "~/.serl/resnet10_params.pkl"
+serl_resnet10_image_size: 128
+serl_resnet10_num_spatial_blocks: 8
+serl_resnet10_auto_download: true
+serl_resnet10_log_keys: false
 
 # === PI05 Specific ===
 tokenizer_max_length: 200

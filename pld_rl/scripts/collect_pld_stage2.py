@@ -122,10 +122,10 @@ def collect_pld_episode(
             obs_tensor = torch.tensor(obs_rl, dtype=torch.float32, device=config.device)
             base_tensor = torch.tensor(base_action, dtype=torch.float32, device=config.device)
 
-            delta = residual_policy.get_action(obs_tensor, base_tensor, deterministic=True)
-            delta = delta.cpu().numpy()
-
-            exec_action = np.clip(base_action + config.xi_final * delta, -1, 1)
+            action = residual_policy.get_action(
+                obs_tensor, base_tensor, xi=config.xi_final, deterministic=True
+            )
+            exec_action = action.cpu().numpy()
             action_label = exec_action.copy()
 
         # Step environment
@@ -281,12 +281,34 @@ def main():
 
     # Create adapter
     if config.use_latent_encoder:
+        encoder = None
+        if config.encoder_type == "serl_resnet10":
+            from pld_rl.rl.serl_resnet10 import SERLResNet10Config, SERLResNet10Encoder
+
+            encoder_cfg = SERLResNet10Config(
+                image_size=config.serl_resnet10_image_size,
+                num_spatial_blocks=config.serl_resnet10_num_spatial_blocks,
+                bottleneck_dim=config.latent_dim,
+            )
+            encoder = SERLResNet10Encoder(
+                config=encoder_cfg,
+                freeze_backbone=config.freeze_encoder,
+                pretrained=True,
+                weights_path=config.serl_resnet10_weights,
+                auto_download=config.serl_resnet10_auto_download,
+                log_weight_keys=config.serl_resnet10_log_keys,
+                device=config.device,
+            )
+
         adapter = LiberoAdapter(
+            encoder=encoder,
             device=config.device,
             latent_dim=config.latent_dim,
             state_dim=config.state_dim,
             freeze_encoder=config.freeze_encoder,
         )
+        if adapter.encoder is not None:
+            adapter.encoder.eval()
     else:
         adapter = ProprioOnlyAdapter(
             state_dim=config.state_dim,
