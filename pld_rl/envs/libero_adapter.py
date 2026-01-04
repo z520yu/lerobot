@@ -276,7 +276,8 @@ class LiberoAdapter:
             batch[k] = v
 
         latent = self.obs_to_rl_latent(batch)
-        return latent.squeeze(0).cpu().numpy()
+        # No gradients needed for environment interaction.
+        return latent.squeeze(0).detach().cpu().numpy()
 
     def _normalize_obs_keys(self, obs: dict) -> dict:
         """Normalize observation keys to standard format."""

@@ -52,6 +52,16 @@ def _find_param(
     return matches[0]
 
 
+def _find_param_any(
+    flat: Dict[Tuple[str, ...], Any], suffixes: Iterable[Tuple[str, ...]]
+) -> Any | None:
+    for suffix in suffixes:
+        value = _find_param(flat, suffix)
+        if value is not None:
+            return value
+    return None
+
+
 def _find_by_shape(
     flat: Dict[Tuple[str, ...], Any],
     shape: Tuple[int, ...],
@@ -352,8 +362,12 @@ def _load_backbone_from_flax(
                 main_kernels.append((k, v))
         conv1_key = ("Conv_0", "kernel")
         conv2_key = ("Conv_1", "kernel")
-        conv1 = _find_param(block_flat, conv1_key) or _find_param(block_flat, ("conv_0", "kernel"))
-        conv2 = _find_param(block_flat, conv2_key) or _find_param(block_flat, ("conv_1", "kernel"))
+        conv1 = _find_param(block_flat, conv1_key)
+        if conv1 is None:
+            conv1 = _find_param(block_flat, ("conv_0", "kernel"))
+        conv2 = _find_param(block_flat, conv2_key)
+        if conv2 is None:
+            conv2 = _find_param(block_flat, ("conv_1", "kernel"))
         if conv1 is None or conv2 is None:
             kernel_keys = [_key_to_str(k) for k, _ in kernel_items]
             print(f"Missing conv keys in {block_name}. Found kernel keys: {kernel_keys}")
@@ -370,17 +384,21 @@ def _load_backbone_from_flax(
         norm1_bias_key = ("GroupNorm_0", "bias")
         norm2_scale_key = ("GroupNorm_1", "scale")
         norm2_bias_key = ("GroupNorm_1", "bias")
-        norm1_scale = _find_param(block_flat, norm1_scale_key) or _find_param(
-            block_flat, ("group_norm_0", "scale")
+        norm1_scale = _find_param_any(
+            block_flat,
+            (norm1_scale_key, ("group_norm_0", "scale"), ("MyGroupNorm_0", "scale")),
         )
-        norm1_bias = _find_param(block_flat, norm1_bias_key) or _find_param(
-            block_flat, ("group_norm_0", "bias")
+        norm1_bias = _find_param_any(
+            block_flat,
+            (norm1_bias_key, ("group_norm_0", "bias"), ("MyGroupNorm_0", "bias")),
         )
-        norm2_scale = _find_param(block_flat, norm2_scale_key) or _find_param(
-            block_flat, ("group_norm_1", "scale")
+        norm2_scale = _find_param_any(
+            block_flat,
+            (norm2_scale_key, ("group_norm_1", "scale"), ("MyGroupNorm_1", "scale")),
         )
-        norm2_bias = _find_param(block_flat, norm2_bias_key) or _find_param(
-            block_flat, ("group_norm_1", "bias")
+        norm2_bias = _find_param_any(
+            block_flat,
+            (norm2_bias_key, ("group_norm_1", "bias"), ("MyGroupNorm_1", "bias")),
         )
         if norm1_scale is None or norm1_bias is None or norm2_scale is None or norm2_bias is None:
             norm_keys = [
@@ -409,8 +427,12 @@ def _load_backbone_from_flax(
                 raise KeyError(f"Missing conv_proj kernel in {block_name}.")
             block.downsample_conv.weight.data.copy_(_transpose_conv(_as_numpy(proj_kernel)))
 
-            proj_scale = _find_param(block_flat, ("norm_proj", "scale"))
-            proj_bias = _find_param(block_flat, ("norm_proj", "bias"))
+            proj_scale = _find_param_any(
+                block_flat, (("norm_proj", "scale"), ("MyGroupNorm_2", "scale"))
+            )
+            proj_bias = _find_param_any(
+                block_flat, (("norm_proj", "bias"), ("MyGroupNorm_2", "bias"))
+            )
             if proj_scale is None or proj_bias is None:
                 norm_keys = [
                     _key_to_str(k)

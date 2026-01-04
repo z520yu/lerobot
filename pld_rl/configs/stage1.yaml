@@ -66,10 +66,10 @@ use_latent_encoder: true
 latent_dim: 256
 freeze_encoder: true
 encoder_type: "serl_resnet10"
-serl_resnet10_weights: "~/.serl/resnet10_params.pkl"
+serl_resnet10_weights: "/home/yu_zhang/lerobot/resnet10_params.pkl"
 serl_resnet10_image_size: 128
 serl_resnet10_num_spatial_blocks: 8
-serl_resnet10_auto_download: true
+serl_resnet10_auto_download: false
 serl_resnet10_log_keys: false
 
 # === PI05 Specific ===
