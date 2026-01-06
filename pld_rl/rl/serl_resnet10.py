@@ -212,7 +212,7 @@ class SERLResNet10Encoder(nn.Module):
         self.bottleneck = nn.Sequential(
             nn.Linear(self.config.num_spatial_blocks * 512, self.config.bottleneck_dim),
             nn.LayerNorm(self.config.bottleneck_dim),
-            nn.Tanh(),
+            nn.SiLU(),
         )
         self.dropout = nn.Dropout(self.config.dropout_rate)
 

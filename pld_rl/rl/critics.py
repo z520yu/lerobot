@@ -33,7 +33,7 @@ class DoubleQCritic(nn.Module):
             layers.extend([
                 nn.Linear(prev_dim, hidden_dim),
                 nn.LayerNorm(hidden_dim),
-                nn.Tanh(),
+                nn.SiLU(),
             ])
             prev_dim = hidden_dim
         layers.append(nn.Linear(hidden_dims[-1], 1))

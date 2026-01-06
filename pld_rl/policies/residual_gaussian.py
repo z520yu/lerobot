@@ -33,7 +33,7 @@ class ResidualGaussianPolicy(nn.Module):
             layers.extend([
                 nn.Linear(prev_dim, hidden_dim),
                 nn.LayerNorm(hidden_dim),
-                nn.Tanh(),
+                nn.SiLU(),
             ])
             prev_dim = hidden_dim
         self.backbone = nn.Sequential(*layers)
@@ -62,12 +62,6 @@ class ResidualGaussianPolicy(nn.Module):
         nn.init.orthogonal_(self.log_std_head.weight, gain=0.01)
         nn.init.zeros_(self.log_std_head.bias)
 
-    @staticmethod
-    def _safe_atanh(x: torch.Tensor, eps: float) -> torch.Tensor:
-        """Numerically stable atanh for inputs expected in (-1, 1)."""
-        x = torch.clamp(x, -1 + eps, 1 - eps)
-        return 0.5 * (torch.log1p(x) - torch.log1p(-x))
-
     def compose_action(
         self,
         base_action: torch.Tensor,
@@ -75,23 +69,20 @@ class ResidualGaussianPolicy(nn.Module):
         xi: float,
     ) -> torch.Tensor:
         """Compose executable action from base_action and raw residual."""
-        base_pre = self._safe_atanh(base_action, self._TANH_EPS)
         xi_tensor = torch.as_tensor(xi, device=base_action.device, dtype=base_action.dtype)
-        action_pre = base_pre + xi_tensor * delta_raw
-        return torch.tanh(action_pre)
+        delta = torch.tanh(delta_raw)
+        action = base_action + xi_tensor * delta
+        return torch.clamp(action, -1.0, 1.0)
 
     def log_prob_action(
         self,
         log_prob_raw: torch.Tensor,
-        action: torch.Tensor,
-        xi: float,
+        delta_raw: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute log-prob of the composed action via change-of-variables."""
+        """Log-prob under tanh-residual in residual space."""
         eps = self._TANH_EPS
-        xi_tensor = torch.as_tensor(xi, device=action.device, dtype=action.dtype)
-        log_scale = action.shape[-1] * torch.log(torch.clamp(xi_tensor, min=eps))
-        log_det = torch.log(1 - action.pow(2) + eps).sum(-1)
-        return log_prob_raw - log_scale - log_det
+        log_det = torch.log(1 - torch.tanh(delta_raw).pow(2) + eps).sum(-1)
+        return log_prob_raw - log_det
 
     def forward(
         self,
@@ -111,11 +102,6 @@ class ResidualGaussianPolicy(nn.Module):
             mean: (batch, action_dim) mean for deterministic evaluation
         """
         if self.include_base_action:
-            base_action = torch.clamp(
-                base_action,
-                -1 + self._TANH_EPS,
-                1 - self._TANH_EPS,
-            )
             x = torch.cat([obs, base_action], dim=-1)
         else:
             x = obs

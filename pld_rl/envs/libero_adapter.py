@@ -87,7 +87,10 @@ class LiberoAdapter:
             else:
                 self.encoder.train()
         else:
-            self.encoder.train()
+            if freeze_encoder:
+                self.encoder.eval()
+            else:
+                self.encoder.train()
 
         if normalize_images is None:
             normalize_images = isinstance(self.encoder, ResNetV1Encoder)

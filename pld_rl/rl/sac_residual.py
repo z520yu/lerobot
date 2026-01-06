@@ -78,9 +78,9 @@ class SACResidualTrainer:
         obs = batch["obs"].to(self.device)
         action = batch["action"].to(self.device)
         base_action = batch["base_action"].to(self.device)
-        reward = batch["reward"].to(self.device)
+        reward = batch["reward"].to(self.device).float().view(-1)
         next_obs = batch["next_obs"].to(self.device)
-        done = batch["done"].to(self.device)
+        done = batch["done"].to(self.device).float().view(-1)
 
         # === Critic Update ===
         with torch.no_grad():
@@ -95,12 +95,18 @@ class SACResidualTrainer:
                 next_base_action = base_action
 
             next_delta_raw, next_log_prob_raw, _ = self.policy(next_obs, next_base_action)
+            # Ensure log_prob is summed over action dimension to shape (B,)
+            if next_log_prob_raw.dim() > 1:
+                next_log_prob_raw = next_log_prob_raw.sum(dim=-1)
+
             next_action = self.policy.compose_action(next_base_action, next_delta_raw, xi)
-            next_log_prob = self.policy.log_prob_action(next_log_prob_raw, next_action, xi)
+            next_log_prob = self.policy.log_prob_action(next_log_prob_raw, next_delta_raw)
 
             target_q1, target_q2 = self.target_critic(next_obs, next_action)
             target_q = torch.min(target_q1, target_q2)
+            # Entropy regularization in residual space.
             target_q = target_q - self.alpha.detach() * next_log_prob
+            target_q_mean = target_q.mean().item()
             target_value = reward + (1 - done) * self.config.discount * target_q
 
         q1, q2 = self.critic(obs, action)
@@ -117,16 +123,30 @@ class SACResidualTrainer:
             "critic_loss": critic_loss.item(),
             "q1_mean": q1.mean().item(),
             "q2_mean": q2.mean().item(),
+            "target_q_mean": target_q_mean,
         }
 
         # === Actor Update ===
         if update_actor:
             delta_raw, log_prob_raw, _ = self.policy(obs, base_action)
-            new_action = self.policy.compose_action(base_action, delta_raw, xi)
-            log_prob = self.policy.log_prob_action(log_prob_raw, new_action, xi)
-            q_new = self.critic.q_min(obs, new_action)
+            if log_prob_raw.dim() > 1:
+                log_prob_raw = log_prob_raw.sum(dim=-1)
+            log_prob_raw_mean = log_prob_raw.mean().item()
 
-            actor_loss = (self.alpha.detach() * log_prob - q_new).mean()
+            new_action = self.policy.compose_action(base_action, delta_raw, xi)
+            log_prob = self.policy.log_prob_action(log_prob_raw, delta_raw)
+            q_new = self.critic.q_min(obs, new_action)
+            xi_tensor = torch.as_tensor(
+                xi, device=delta_raw.device, dtype=delta_raw.dtype
+            )
+            pre_action = base_action + xi_tensor * torch.tanh(delta_raw)
+            residual_penalty = (pre_action - base_action).pow(2).mean(dim=-1)
+
+            actor_loss = (
+                self.alpha.detach() * log_prob
+                - q_new
+                + self.config.residual_penalty_weight * residual_penalty
+            ).mean()
 
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
@@ -136,26 +156,52 @@ class SACResidualTrainer:
             self.actor_optimizer.step()
 
             # === Temperature Update ===
-            # Adjust target entropy to cancel xi scaling in log_prob_action.
-            xi_tensor = torch.as_tensor(xi, device=log_prob.device, dtype=log_prob.dtype)
             target_entropy = torch.as_tensor(
                 self.target_entropy, device=log_prob.device, dtype=log_prob.dtype
-            )
-            eps = self.policy._TANH_EPS
-            target_entropy = target_entropy + self.policy.action_dim * torch.log(
-                torch.clamp(xi_tensor, min=eps)
             )
             alpha_loss = -(self.log_alpha * (log_prob.detach() + target_entropy)).mean()
 
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self.alpha_optimizer.step()
+            if self.config.log_alpha_min is not None:
+                with torch.no_grad():
+                    self.log_alpha.clamp_(min=self.config.log_alpha_min)
+
+            with torch.no_grad():
+                delta_raw_detached = delta_raw.detach()
+                new_action_detached = new_action.detach()
+                base_action_detached = base_action.detach()
+                xi_tensor = torch.as_tensor(
+                    xi, device=delta_raw_detached.device, dtype=delta_raw_detached.dtype
+                )
+                pre_action = base_action_detached + xi_tensor * torch.tanh(delta_raw_detached)
+                delta_raw_std = delta_raw_detached.std(unbiased=False).item()
+                delta_raw_clip_frac = (
+                    (delta_raw_detached.abs() > 1.0).float().mean().item()
+                )
+                action_clamp_frac = (pre_action.abs() > 1.0).float().mean().item()
+                residual_l1 = (
+                    (new_action_detached - base_action_detached).abs().mean().item()
+                )
+                base_action_min = base_action_detached.min().item()
+                base_action_max = base_action_detached.max().item()
+
+            log_prob_used = log_prob.mean().item()
 
             losses.update({
                 "actor_loss": actor_loss.item(),
                 "alpha_loss": alpha_loss.item(),
                 "alpha": self.alpha.item(),
-                "log_prob": log_prob.mean().item(),
+                "xi": xi,
+                "log_prob_used": log_prob_used,
+                "log_prob_raw": log_prob_raw_mean,
+                "delta_raw_std": delta_raw_std,
+                "delta_raw_clip_frac": delta_raw_clip_frac,
+                "action_clamp_frac": action_clamp_frac,
+                "residual_l1": residual_l1,
+                "base_action_min": base_action_min,
+                "base_action_max": base_action_max,
             })
 
         # === Target Network Update ===

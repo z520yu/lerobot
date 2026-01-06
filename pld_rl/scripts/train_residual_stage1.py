@@ -10,6 +10,7 @@ This script implements the PLD Residual RL training loop:
 
 import argparse
 import logging
+import pickle
 import random
 from pathlib import Path
 
@@ -55,6 +56,85 @@ def _setup_file_logger(output_dir: Path) -> None:
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     root_logger.addHandler(file_handler)
+
+
+def _buffer_metadata(
+    config: PLDConfig,
+    obs_dim: int,
+    action_dim: int,
+    stage: str,
+) -> dict[str, object]:
+    return {
+        "stage": stage,
+        "env_name": config.env_name,
+        "task_id": config.task_id,
+        "obs_dim": obs_dim,
+        "action_dim": action_dim,
+        "use_latent_encoder": config.use_latent_encoder,
+        "latent_dim": config.latent_dim,
+        "state_dim": config.state_dim,
+        "encoder_type": config.encoder_type,
+        "base_policy_path": str(config.base_policy_path),
+    }
+
+
+def _load_buffer(
+    path: Path,
+    expected_meta: dict[str, object],
+    stage: str,
+) -> list[Transition] | None:
+    try:
+        with open(path, "rb") as f:
+            payload = pickle.load(f)
+    except Exception as exc:
+        logger.warning("Failed to load %s buffer from %s: %s", stage, path, exc)
+        return None
+
+    if isinstance(payload, dict) and "transitions" in payload:
+        metadata = payload.get("metadata", {})
+        transitions = payload.get("transitions", [])
+    else:
+        metadata = {}
+        transitions = payload
+
+    if metadata:
+        mismatches = []
+        for key, value in expected_meta.items():
+            if metadata.get(key) != value:
+                mismatches.append(f"{key}={metadata.get(key)} (expected {value})")
+        if mismatches:
+            logger.warning(
+                "Skipping %s buffer from %s due to metadata mismatch: %s",
+                stage,
+                path,
+                "; ".join(mismatches),
+            )
+            return None
+    else:
+        logger.warning("No metadata found in %s buffer %s; loading anyway.", stage, path)
+
+    if not transitions:
+        logger.warning("No transitions found in %s buffer %s.", stage, path)
+        return None
+
+    logger.info("Loaded %s buffer with %d transitions from %s", stage, len(transitions), path)
+    return transitions
+
+
+def _save_buffer(
+    path: Path,
+    transitions: list[Transition],
+    metadata: dict[str, object],
+    stage: str,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "metadata": metadata,
+        "transitions": transitions,
+    }
+    with open(path, "wb") as f:
+        pickle.dump(payload, f)
+    logger.info("Saved %s buffer with %d transitions to %s", stage, len(transitions), path)
 
 
 def _next_base_action_and_source(
@@ -215,6 +295,80 @@ def collect_offline_data(
     pbar.close()
     logger.info(f"Collected {success_count} successful episodes ({replay_buffer.offline_size} transitions)")
     return success_count
+
+
+def collect_warmup_online_data(
+    env,
+    base_wrapper: PI05BaseWrapper,
+    adapter: LiberoAdapter,
+    replay_buffer: HybridReplayBuffer,
+    config: PLDConfig,
+    task_text: str = "",
+) -> int:
+    """Collect base-policy warmup data to prefill the online buffer."""
+    if config.warmup_episodes <= 0:
+        return 0
+
+    logger.info("Collecting warmup online data for %d episodes...", config.warmup_episodes)
+    transitions_added = 0
+    pbar = tqdm(range(config.warmup_episodes), desc="Collecting warmup online data")
+
+    for _ in pbar:
+        obs, info = env.reset()
+        task_text_ep = info.get("task", task_text)
+        base_wrapper.reset(task_text_ep)
+
+        probe_steps = np.random.randint(0, config.probe_max_steps + 1)
+        terminated = False
+        truncated = False
+        for _ in range(probe_steps):
+            batch = adapter.env_obs_to_batch(obs, task_text_ep)
+            base_action = base_wrapper.act(batch)
+            obs, _, terminated, truncated, _ = env.step(base_action)
+            if terminated or truncated:
+                break
+
+        if terminated or truncated:
+            continue
+
+        env_batch = adapter.env_obs_to_batch(obs, task_text_ep)
+        base_action = base_wrapper.act(env_batch)
+
+        for _ in range(config.env_max_steps - probe_steps):
+            obs_rl = adapter.single_obs_to_rl_latent(obs)
+            exec_action = base_action.copy()
+            next_obs, reward, terminated, truncated, _ = env.step(exec_action)
+            done = terminated or truncated
+
+            next_obs_rl = adapter.single_obs_to_rl_latent(next_obs)
+            next_base_action, _ = _next_base_action_and_source(
+                base_wrapper, adapter, next_obs, task_text_ep, done, base_action
+            )
+
+            replay_buffer.add_online(Transition(
+                obs=obs_rl,
+                action=exec_action.copy(),
+                base_action=base_action.copy(),
+                next_base_action=next_base_action.copy(),
+                reward=reward,
+                next_obs=next_obs_rl,
+                done=done,
+            ))
+            transitions_added += 1
+
+            obs = next_obs
+            base_action = next_base_action
+            if done:
+                break
+
+        pbar.set_postfix({
+            "online_size": replay_buffer.online_size,
+            "transitions": transitions_added,
+        })
+
+    pbar.close()
+    logger.info("Collected warmup online transitions: %d", transitions_added)
+    return transitions_added
 
 
 def pretrain_critic_calql(
@@ -391,6 +545,7 @@ def train_residual_rl(
     xi_scheduler: CosineXiScheduler,
     config: PLDConfig,
     task_text: str = "",
+    start_episode: int = 0,
 ):
     """
     Main residual RL training loop.
@@ -404,6 +559,7 @@ def train_residual_rl(
         xi_scheduler: residual scale scheduler
         config: configuration
         task_text: task description
+        start_episode: episode index to start training from (for warmup reuse)
     """
     logger.info("Starting residual RL training...")
 
@@ -417,7 +573,8 @@ def train_residual_rl(
     total_steps = 0
     best_success_rate = 0.0
 
-    pbar = tqdm(range(config.max_episodes), desc="Training")
+    start_episode = max(0, min(start_episode, config.max_episodes))
+    pbar = tqdm(range(start_episode, config.max_episodes), desc="Training")
 
     for episode in pbar:
         obs, info = env.reset()
@@ -516,12 +673,24 @@ def train_residual_rl(
 
         if config.log_freq > 0 and episode > 0 and episode % config.log_freq == 0:
             avg_q = _mean_loss(losses_episode, "q1_mean")
+            avg_target_q = _mean_loss(losses_episode, "target_q_mean")
             avg_critic = _mean_loss(losses_episode, "critic_loss")
             avg_actor = _mean_loss(losses_episode, "actor_loss")
             avg_alpha = _mean_loss(losses_episode, "alpha")
+            avg_log_prob_used = _mean_loss(losses_episode, "log_prob_used")
+            avg_log_prob_raw = _mean_loss(losses_episode, "log_prob_raw")
+            avg_delta_std = _mean_loss(losses_episode, "delta_raw_std")
+            avg_delta_clip = _mean_loss(losses_episode, "delta_raw_clip_frac")
+            avg_action_clamp = _mean_loss(losses_episode, "action_clamp_frac")
+            avg_residual_l1 = _mean_loss(losses_episode, "residual_l1")
+            avg_base_min = _mean_loss(losses_episode, "base_action_min")
+            avg_base_max = _mean_loss(losses_episode, "base_action_max")
             logger.info(
                 "Episode %d (res_ep=%d, xi=%.3f, reward=%.2f, steps=%d, q=%.2f, "
-                "critic=%.4f, actor=%.4f, alpha=%.3f, offline=%d, online=%d) "
+                "target_q=%.2f, critic=%.4f, actor=%.4f, alpha=%.3f, log_prob_used=%.3f, "
+                "log_prob_raw=%.3f, delta_std=%.3f, delta_clip=%.2f, act_clamp=%.2f, "
+                "res_l1=%.3f, "
+                "base_min=%.2f, base_max=%.2f, offline=%d, online=%d) "
                 "next_base_action_source: base_copy=%d chunk_cached=%d chunk_refill=%d",
                 episode,
                 res_episode,
@@ -529,9 +698,18 @@ def train_residual_rl(
                 episode_reward,
                 episode_steps,
                 avg_q,
+                avg_target_q,
                 avg_critic,
                 avg_actor,
                 avg_alpha,
+                avg_log_prob_used,
+                avg_log_prob_raw,
+                avg_delta_std,
+                avg_delta_clip,
+                avg_action_clamp,
+                avg_residual_l1,
+                avg_base_min,
+                avg_base_max,
                 replay_buffer.offline_size,
                 replay_buffer.online_size,
                 source_counts["base_copy"],
@@ -570,6 +748,12 @@ def main():
     parser.add_argument("--config", type=str, default=None, help="Path to config YAML")
     parser.add_argument("--base-policy-path", type=str, default=None, help="Base policy checkpoint")
     parser.add_argument("--output-dir", type=str, default=None, help="Output directory")
+    parser.add_argument(
+        "--buffer-cache-dir",
+        type=str,
+        default=None,
+        help="Directory for offline/warmup buffer caches",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--device", type=str, default=None, help="Device (cuda/cpu)")
     args = parser.parse_args()
@@ -585,6 +769,8 @@ def main():
         config.base_policy_path = args.base_policy_path
     if args.output_dir:
         config.output_dir = args.output_dir
+    if args.buffer_cache_dir:
+        config.buffer_cache_dir = args.buffer_cache_dir
     if args.seed:
         config.seed = args.seed
     if args.device:
@@ -597,6 +783,11 @@ def main():
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     _setup_file_logger(output_dir)
+    cache_dir = output_dir
+    if config.buffer_cache_dir:
+        cache_dir = Path(config.buffer_cache_dir).expanduser()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Buffer cache dir: %s", cache_dir)
 
     # Create environment
     env = make_libero_env(
@@ -678,16 +869,65 @@ def main():
     )
 
     # Step 1: Collect offline success data
-    collect_offline_data(
-        env, base_wrapper, adapter, replay_buffer, config,
-    )
+    offline_cache_path = cache_dir / "offline_buffer.pkl"
+    offline_meta = _buffer_metadata(config, obs_dim, config.action_dim, stage="offline")
+    offline_loaded = False
+    if offline_cache_path.exists():
+        transitions = _load_buffer(offline_cache_path, offline_meta, stage="offline")
+        if transitions:
+            for trans in transitions:
+                replay_buffer.add_offline(trans)
+            offline_loaded = True
+    if not offline_loaded:
+        collect_offline_data(
+            env, base_wrapper, adapter, replay_buffer, config,
+        )
+        _save_buffer(
+            offline_cache_path,
+            list(replay_buffer.offline_buffer),
+            offline_meta,
+            stage="offline",
+        )
 
     # Step 2: Pretrain critic with Cal-QL
     pretrain_critic_calql(
         critic, target_critic, residual_policy, replay_buffer, config,
     )
 
-    # Step 3: Create trainer and xi scheduler
+    # Step 3: Collect or load warmup online data
+    warmup_loaded = False
+    warmup_cache_path = cache_dir / f"online_warmup_ep{config.warmup_episodes}.pkl"
+    warmup_meta = _buffer_metadata(
+        config, obs_dim, config.action_dim, stage="online_warmup"
+    )
+    warmup_meta["warmup_episodes"] = config.warmup_episodes
+    if config.warmup_episodes > 0:
+        if warmup_cache_path.exists():
+            transitions = _load_buffer(
+                warmup_cache_path, warmup_meta, stage="online_warmup"
+            )
+            if transitions:
+                for trans in transitions:
+                    replay_buffer.add_online(trans)
+                warmup_loaded = True
+        if not warmup_loaded:
+            transitions_added = collect_warmup_online_data(
+                env, base_wrapper, adapter, replay_buffer, config,
+            )
+            if transitions_added > 0:
+                _save_buffer(
+                    warmup_cache_path,
+                    list(replay_buffer.online_buffer),
+                    warmup_meta,
+                    stage="online_warmup",
+                )
+                warmup_loaded = True
+            else:
+                logger.warning(
+                    "Warmup collection returned 0 transitions; continuing without warmup skip."
+                )
+
+    # Step 4: Create trainer and xi scheduler
     trainer = SACResidualTrainer(
         residual_policy=residual_policy,
         critic=critic,
@@ -701,9 +941,17 @@ def main():
         xi_final=config.xi_final,
         warmup_episodes=config.xi_warmup_episodes,
     )
-    # Step 4: Train residual policy
+    # Step 5: Train residual policy
+    start_episode = config.warmup_episodes if warmup_loaded else 0
     train_residual_rl(
-        env, base_wrapper, trainer, replay_buffer, adapter, xi_scheduler, config,
+        env,
+        base_wrapper,
+        trainer,
+        replay_buffer,
+        adapter,
+        xi_scheduler,
+        config,
+        start_episode=start_episode,
     )
 
     env.close()

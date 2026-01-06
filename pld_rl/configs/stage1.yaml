@@ -19,7 +19,7 @@ residual_hidden_dims:
   - 256
   - 256
 residual_std_min: 1.0e-5
-residual_std_max: 5.0
+residual_std_max: 1.0
 
 # === Critic ===
 critic_hidden_dims:
@@ -34,10 +34,12 @@ tau: 0.005
 actor_lr: 3.0e-4
 critic_lr: 3.0e-4
 temperature_init: 1.0
+log_alpha_min: -6.9
 grad_clip_norm: 1.0
+residual_penalty_weight: 0.001
 
 # === Residual Scale Schedule ===
-xi_init: 0.01
+xi_init: 0.05
 xi_final: 0.3
 xi_warmup_episodes: 400
 
@@ -77,5 +79,6 @@ tokenizer_max_length: 200
 
 # === Output ===
 output_dir: "./outputs/pld_rl_stage1"
+buffer_cache_dir: "/home/yu_zhang/lerobot/outputs"
 seed: 42
 device: "cuda"

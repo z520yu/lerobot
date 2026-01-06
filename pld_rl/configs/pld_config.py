@@ -40,7 +40,9 @@ class PLDConfig:
     temperature_lr: float = 3e-4
     temperature_init: float = 1.0
     target_entropy: float | None = None
+    log_alpha_min: float | None = None
     grad_clip_norm: float = 1.0
+    residual_penalty_weight: float = 0.0
 
     # === Residual Scale Schedule ===
     xi_init: float = 0.01
@@ -87,6 +89,7 @@ class PLDConfig:
 
     # === Output ===
     output_dir: str = "./outputs/pld_rl"
+    buffer_cache_dir: str | Path | None = None
     seed: int = 42
     device: str = "cuda"
 
@@ -97,6 +100,8 @@ class PLDConfig:
             self.base_policy_path = Path(self.base_policy_path)
         if isinstance(self.serl_resnet10_weights, str):
             self.serl_resnet10_weights = Path(self.serl_resnet10_weights)
+        if isinstance(self.buffer_cache_dir, str):
+            self.buffer_cache_dir = Path(self.buffer_cache_dir)
 
     @property
     def obs_dim(self) -> int:
