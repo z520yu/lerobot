@@ -46,13 +46,23 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
-def _setup_file_logger(output_dir: Path) -> None:
-    log_path = output_dir / "train.log"
+def _setup_file_logger(
+    output_dir: Path,
+    log_file: Path | None = None,
+    log_mode: str = "a",
+) -> None:
+    if log_file is None:
+        log_path = output_dir / "train.log"
+    else:
+        log_path = log_file.expanduser()
+        if not log_path.is_absolute():
+            log_path = output_dir / log_path
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     root_logger = logging.getLogger()
     for handler in root_logger.handlers:
         if isinstance(handler, logging.FileHandler) and handler.baseFilename == str(log_path):
             return
-    file_handler = logging.FileHandler(log_path, mode="a")
+    file_handler = logging.FileHandler(log_path, mode=log_mode)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     root_logger.addHandler(file_handler)
@@ -785,7 +795,7 @@ def main():
 
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    _setup_file_logger(output_dir)
+    _setup_file_logger(output_dir, config.log_file, config.log_mode)
     cache_dir = output_dir
     if config.buffer_cache_dir:
         cache_dir = Path(config.buffer_cache_dir).expanduser()

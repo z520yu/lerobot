@@ -80,6 +80,8 @@ tokenizer_max_length: 200
 
 # === Output ===
 output_dir: "./outputs/pld_rl_stage1"
+log_file: "/home/yu_zhang/lerobot/pld_rl/train.log"
+log_mode: "w"
 buffer_cache_dir: "/home/yu_zhang/lerobot/outputs"
 seed: 42
 device: "cuda"
