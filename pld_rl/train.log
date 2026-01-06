@@ -1,0 +1,202 @@
+2025-12-31 18:50:11,687 - WARNING - No private macro file found!
+2025-12-31 18:50:11,687 - WARNING - It is recommended to use a private macro file
+2025-12-31 18:50:11,687 - WARNING - To setup, run: python /home/yu_zhang/miniforge3/envs/lerobot/lib/python3.10/site-packages/robosuite/scripts/setup_macros.py
+2025-12-31 18:50:11,716 - INFO - No OpenGL_accelerate module loaded: No module named 'OpenGL_accelerate'
+2025-12-31 18:50:13,682 - INFO - Created LIBERO environment: libero_10 task 6
+2025-12-31 18:50:13,682 - INFO -   Task: put the white mug on the plate and put the chocolate pudding to the right of the plate
+2025-12-31 18:50:13,868 - INFO - LiberoAdapter initialized: encoder=ResNetV1Encoder freeze_encoder=True normalize_images=True
+2025-12-31 18:50:37,282 - INFO - Enabled gradient checkpointing for PI05Pytorch model
+2025-12-31 18:50:37,902 - WARNING - Vision embedding key might need handling: model.paligemma_with_expert.paligemma.model.vision_tower.vision_model.embeddings.patch_embedding.bias
+2025-12-31 18:50:37,902 - WARNING - Vision embedding key might need handling: model.paligemma_with_expert.paligemma.model.vision_tower.vision_model.embeddings.patch_embedding.weight
+2025-12-31 18:50:44,028 - INFO - Loaded preprocessor and postprocessor from pretrained model
+2025-12-31 18:50:44,028 - INFO -   preprocessor: /home/yu_zhang/lerobot/data1_zy/pi066_复现/checkpoints/006000/pretrained_model/policy_preprocessor.json
+2025-12-31 18:50:44,028 - INFO -   postprocessor: /home/yu_zhang/lerobot/data1_zy/pi066_复现/checkpoints/006000/pretrained_model/policy_postprocessor.json
+2025-12-31 18:50:44,028 - INFO - Loaded PI05 policy from /home/yu_zhang/lerobot/data1_zy/pi066_复现/checkpoints/006000/pretrained_model
+2025-12-31 18:50:44,028 - INFO -   chunk_size=50, n_action_steps=10
+2025-12-31 18:50:44,028 - INFO -   action_dim=7
+2025-12-31 18:50:44,047 - INFO - Collecting offline success episodes...
+2025-12-31 18:51:56,650 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=223 chunk_refill=24
+2025-12-31 18:51:56,650 - INFO - Offline progress: episodes=10 success=5 rate=50.00% offline_size=1107 last_steps=248
+2025-12-31 18:52:50,896 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=200 chunk_refill=22
+2025-12-31 18:52:50,896 - INFO - Offline progress: episodes=20 success=14 rate=70.00% offline_size=3108 last_steps=223
+2025-12-31 18:53:46,389 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=195 chunk_refill=21
+2025-12-31 18:53:46,389 - INFO - Offline progress: episodes=30 success=23 rate=76.67% offline_size=5135 last_steps=217
+2025-12-31 18:54:34,072 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=188 chunk_refill=20
+2025-12-31 18:54:34,072 - INFO - Offline progress: episodes=40 success=33 rate=82.50% offline_size=7305 last_steps=209
+2025-12-31 18:55:39,285 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=203 chunk_refill=22
+2025-12-31 18:55:39,285 - INFO - Offline progress: episodes=50 success=41 rate=82.00% offline_size=9242 last_steps=226
+2025-12-31 18:56:43,238 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=187 chunk_refill=20
+2025-12-31 18:56:43,238 - INFO - Offline progress: episodes=60 success=49 rate=81.67% offline_size=11183 last_steps=208
+2025-12-31 18:57:44,308 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=196 chunk_refill=21
+2025-12-31 18:57:44,308 - INFO - Offline progress: episodes=70 success=58 rate=82.86% offline_size=13436 last_steps=218
+2025-12-31 18:58:48,484 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=211 chunk_refill=23
+2025-12-31 18:58:48,484 - INFO - Offline progress: episodes=80 success=66 rate=82.50% offline_size=15359 last_steps=235
+2025-12-31 18:59:38,320 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=192 chunk_refill=21
+2025-12-31 18:59:38,320 - INFO - Offline progress: episodes=90 success=76 rate=84.44% offline_size=17619 last_steps=214
+2025-12-31 19:00:30,610 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=234 chunk_refill=26
+2025-12-31 19:00:30,610 - INFO - Offline progress: episodes=100 success=86 rate=86.00% offline_size=19934 last_steps=261
+2025-12-31 19:01:25,220 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=189 chunk_refill=21
+2025-12-31 19:01:25,220 - INFO - Offline progress: episodes=110 success=95 rate=86.36% offline_size=21955 last_steps=211
+2025-12-31 19:02:13,275 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=184 chunk_refill=20
+2025-12-31 19:02:13,275 - INFO - Offline progress: episodes=120 success=105 rate=87.50% offline_size=24125 last_steps=205
+2025-12-31 19:03:19,470 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=450 chunk_refill=49
+2025-12-31 19:03:19,470 - INFO - Offline progress: episodes=130 success=114 rate=87.69% offline_size=26340 last_steps=500
+2025-12-31 19:04:15,502 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=196 chunk_refill=21
+2025-12-31 19:04:15,502 - INFO - Offline progress: episodes=140 success=122 rate=87.14% offline_size=28143 last_steps=218
+2025-12-31 19:05:12,192 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=387 chunk_refill=42
+2025-12-31 19:05:12,192 - INFO - Offline progress: episodes=150 success=132 rate=88.00% offline_size=30480 last_steps=430
+2025-12-31 19:06:04,030 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=184 chunk_refill=20
+2025-12-31 19:06:04,031 - INFO - Offline progress: episodes=160 success=142 rate=88.75% offline_size=33042 last_steps=205
+2025-12-31 19:07:01,647 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=195 chunk_refill=21
+2025-12-31 19:07:01,647 - INFO - Offline progress: episodes=170 success=151 rate=88.82% offline_size=35130 last_steps=217
+2025-12-31 19:08:12,777 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=194 chunk_refill=21
+2025-12-31 19:08:12,777 - INFO - Offline progress: episodes=180 success=158 rate=87.78% offline_size=36822 last_steps=216
+2025-12-31 19:09:14,108 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=404 chunk_refill=44
+2025-12-31 19:09:14,108 - INFO - Offline progress: episodes=190 success=167 rate=87.89% offline_size=38853 last_steps=449
+2025-12-31 19:10:01,871 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=207 chunk_refill=22
+2025-12-31 19:10:01,871 - INFO - Offline progress: episodes=200 success=177 rate=88.50% offline_size=41223 last_steps=230
+2025-12-31 19:11:00,506 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=261 chunk_refill=29
+2025-12-31 19:11:00,506 - INFO - Offline progress: episodes=210 success=186 rate=88.57% offline_size=43326 last_steps=291
+2025-12-31 19:12:11,343 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=450 chunk_refill=49
+2025-12-31 19:12:11,343 - INFO - Offline progress: episodes=220 success=194 rate=88.18% offline_size=45310 last_steps=500
+2025-12-31 19:13:02,121 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=287 chunk_refill=31
+2025-12-31 19:13:02,121 - INFO - Offline progress: episodes=230 success=203 rate=88.26% offline_size=47264 last_steps=319
+2025-12-31 19:14:05,144 - INFO - Offline next_base_action_source: base_copy=1 chunk_cached=244 chunk_refill=27
+2025-12-31 19:14:05,144 - INFO - Offline progress: episodes=240 success=211 rate=87.92% offline_size=49158 last_steps=272
+2025-12-31 19:14:21,927 - INFO - Collected 215 successful episodes (50000 transitions)
+2025-12-31 19:14:21,927 - INFO - Pretraining critic with Cal-QL for 5000 steps...
+2025-12-31 19:14:21,975 - INFO - Cal-QL step 1/5000 td=0.0000 calql=0.0000 total=0.0000 q1=0.00 q2=-0.00
+2025-12-31 19:14:24,807 - INFO - Cal-QL step 501/5000 td=0.0059 calql=0.0001 total=0.0060 q1=0.05 q2=0.05
+2025-12-31 19:14:27,593 - INFO - Cal-QL step 1001/5000 td=0.0034 calql=0.0001 total=0.0035 q1=0.08 q2=0.09
+2025-12-31 19:14:30,547 - INFO - Cal-QL step 1501/5000 td=0.0022 calql=0.0001 total=0.0023 q1=0.12 q2=0.12
+2025-12-31 19:14:33,444 - INFO - Cal-QL step 2001/5000 td=0.0020 calql=0.0001 total=0.0020 q1=0.15 q2=0.13
+2025-12-31 19:14:37,021 - INFO - Cal-QL step 2501/5000 td=0.0020 calql=0.0000 total=0.0020 q1=0.18 q2=0.18
+2025-12-31 19:14:39,988 - INFO - Cal-QL step 3001/5000 td=0.0017 calql=0.0000 total=0.0017 q1=0.22 q2=0.22
+2025-12-31 19:14:42,896 - INFO - Cal-QL step 3501/5000 td=0.0019 calql=0.0000 total=0.0019 q1=0.23 q2=0.25
+2025-12-31 19:14:45,778 - INFO - Cal-QL step 4001/5000 td=0.0018 calql=0.0000 total=0.0018 q1=0.28 q2=0.28
+2025-12-31 19:14:48,460 - INFO - Cal-QL step 4501/5000 td=0.0020 calql=0.0000 total=0.0020 q1=0.32 q2=0.32
+2025-12-31 19:14:51,152 - INFO - Cal-QL step 5000/5000 td=0.0021 calql=-0.0001 total=0.0020 q1=0.36 q2=0.37
+2025-12-31 19:14:51,153 - INFO - Cal-QL pretraining complete. Final losses: {'td_loss': 0.002094185427046199, 'calql_loss': -7.310308445197698e-05, 'total_loss': 0.0020210823421356436, 'q1_mean': 0.3202368652909111, 'q2_mean': 0.3208317469522508}
+2025-12-31 19:14:51,154 - INFO - Starting residual RL training...
+2025-12-31 19:15:49,676 - INFO - Episode 10 (res_ep=0, xi=0.010, reward=1.00, steps=187, q=nan, critic=nan, actor=nan, alpha=nan, offline=50000, online=2148) next_base_action_source: base_copy=1 chunk_cached=167 chunk_refill=19
+2025-12-31 19:16:50,520 - INFO - Episode 20 (res_ep=0, xi=0.010, reward=1.00, steps=194, q=nan, critic=nan, actor=nan, alpha=nan, offline=50000, online=4536) next_base_action_source: base_copy=1 chunk_cached=173 chunk_refill=20
+2025-12-31 19:17:38,358 - INFO - Episode 30 (res_ep=0, xi=0.010, reward=1.00, steps=122, q=nan, critic=nan, actor=nan, alpha=nan, offline=50000, online=6127) next_base_action_source: base_copy=1 chunk_cached=109 chunk_refill=12
+2025-12-31 19:18:31,335 - INFO - Episode 40 (res_ep=0, xi=0.010, reward=1.00, steps=143, q=nan, critic=nan, actor=nan, alpha=nan, offline=50000, online=8095) next_base_action_source: base_copy=1 chunk_cached=128 chunk_refill=14
+2025-12-31 19:19:30,592 - INFO - Episode 50 (res_ep=0, xi=0.010, reward=1.00, steps=156, q=nan, critic=nan, actor=nan, alpha=nan, offline=50000, online=10302) next_base_action_source: base_copy=1 chunk_cached=139 chunk_refill=16
+2025-12-31 19:20:32,493 - INFO - Episode 50 - Eval (warmup eval): {'success_rate': np.float64(0.8), 'mean_episode_length': np.float64(232.2), 'mean_reward': np.float64(0.8), 'probe_max_steps': 100, 'mean_probe_steps': 59.0}
+2025-12-31 19:20:32,501 - INFO - New best success rate: 80.00%
+2025-12-31 19:21:26,338 - INFO - Episode 60 (res_ep=0, xi=0.010, reward=1.00, steps=175, q=nan, critic=nan, actor=nan, alpha=nan, offline=50000, online=12284) next_base_action_source: base_copy=1 chunk_cached=157 chunk_refill=17
+2025-12-31 19:22:21,142 - INFO - Episode 70 (res_ep=0, xi=0.010, reward=1.00, steps=118, q=nan, critic=nan, actor=nan, alpha=nan, offline=50000, online=14228) next_base_action_source: base_copy=1 chunk_cached=105 chunk_refill=12
+2025-12-31 19:23:17,339 - INFO - Episode 80 (res_ep=0, xi=0.010, reward=1.00, steps=135, q=nan, critic=nan, actor=nan, alpha=nan, offline=50000, online=16173) next_base_action_source: base_copy=1 chunk_cached=121 chunk_refill=13
+2025-12-31 19:24:11,383 - INFO - Episode 90 (res_ep=0, xi=0.010, reward=1.00, steps=115, q=nan, critic=nan, actor=nan, alpha=nan, offline=50000, online=18061) next_base_action_source: base_copy=1 chunk_cached=102 chunk_refill=12
+2025-12-31 19:25:14,511 - INFO - Episode 100 (res_ep=0, xi=0.010, reward=1.00, steps=199, q=7.78, critic=3.0134, actor=-12.4190, alpha=0.971, offline=50000, online=20272) next_base_action_source: base_copy=1 chunk_cached=179 chunk_refill=19
+2025-12-31 19:26:14,404 - INFO - Episode 100 - Eval: {'success_rate': np.float64(0.8), 'mean_episode_length': np.float64(222.4), 'mean_reward': np.float64(0.8), 'probe_max_steps': 100, 'mean_probe_steps': 57.2}
+2025-12-31 19:28:00,741 - INFO - Episode 110 (res_ep=10, xi=0.011, reward=1.00, steps=186, q=68.24, critic=10.9231, actor=-70.2587, alpha=0.459, offline=50000, online=22763) next_base_action_source: base_copy=1 chunk_cached=166 chunk_refill=19
+2025-12-31 19:29:23,059 - INFO - Episode 120 (res_ep=20, xi=0.012, reward=1.00, steps=116, q=76.36, critic=11.3300, actor=-77.2227, alpha=0.251, offline=50000, online=24738) next_base_action_source: base_copy=1 chunk_cached=103 chunk_refill=12
+2025-12-31 19:30:32,980 - INFO - Episode 130 (res_ep=30, xi=0.015, reward=1.00, steps=123, q=71.05, critic=11.5158, actor=-71.5140, alpha=0.159, offline=50000, online=26272) next_base_action_source: base_copy=1 chunk_cached=110 chunk_refill=12
+2025-12-31 19:31:53,324 - INFO - Episode 140 (res_ep=40, xi=0.019, reward=1.00, steps=154, q=58.58, critic=11.3758, actor=-58.4531, alpha=0.090, offline=50000, online=28179) next_base_action_source: base_copy=1 chunk_cached=137 chunk_refill=16
+2025-12-31 19:33:29,630 - INFO - Episode 150 (res_ep=50, xi=0.023, reward=1.00, steps=143, q=39.37, critic=11.5753, actor=-39.1531, alpha=0.044, offline=50000, online=30621) next_base_action_source: base_copy=1 chunk_cached=128 chunk_refill=14
+2025-12-31 19:34:41,212 - INFO - Episode 150 - Eval: {'success_rate': np.float64(0.6), 'mean_episode_length': np.float64(279.6), 'mean_reward': np.float64(0.6), 'probe_max_steps': 100, 'mean_probe_steps': 51.9}
+2025-12-31 19:36:23,982 - INFO - Episode 160 (res_ep=60, xi=0.029, reward=0.00, steps=463, q=23.25, critic=9.2396, actor=-22.8536, alpha=0.022, offline=50000, online=33224) next_base_action_source: base_copy=1 chunk_cached=416 chunk_refill=46
+2025-12-31 19:38:38,246 - INFO - Episode 170 (res_ep=70, xi=0.035, reward=0.00, steps=425, q=6.73, critic=6.6036, actor=-6.4964, alpha=0.009, offline=50000, online=36742) next_base_action_source: base_copy=1 chunk_cached=382 chunk_refill=42
+2025-12-31 19:40:40,797 - INFO - Episode 180 (res_ep=80, xi=0.041, reward=1.00, steps=176, q=-2.15, critic=4.0771, actor=2.3382, alpha=0.004, offline=50000, online=39998) next_base_action_source: base_copy=1 chunk_cached=158 chunk_refill=17
+2025-12-31 19:42:37,960 - INFO - Episode 190 (res_ep=90, xi=0.048, reward=1.00, steps=167, q=-5.99, critic=3.2630, actor=6.2034, alpha=0.003, offline=50000, online=42961) next_base_action_source: base_copy=1 chunk_cached=149 chunk_refill=17
+2025-12-31 19:44:04,271 - INFO - Episode 200 (res_ep=100, xi=0.055, reward=1.00, steps=104, q=-7.10, critic=3.0980, actor=7.2569, alpha=0.003, offline=50000, online=44974) next_base_action_source: base_copy=1 chunk_cached=92 chunk_refill=11
+2025-12-31 19:45:05,025 - INFO - Episode 200 - Eval: {'success_rate': np.float64(0.8), 'mean_episode_length': np.float64(236.6), 'mean_reward': np.float64(0.8), 'probe_max_steps': 100, 'mean_probe_steps': 44.3}
+2025-12-31 19:46:40,924 - INFO - Episode 210 (res_ep=110, xi=0.062, reward=1.00, steps=216, q=-7.68, critic=2.8334, actor=7.8916, alpha=0.003, offline=50000, online=47337) next_base_action_source: base_copy=1 chunk_cached=194 chunk_refill=21
+2025-12-31 19:48:48,291 - INFO - Episode 220 (res_ep=120, xi=0.069, reward=1.00, steps=151, q=-7.95, critic=2.8238, actor=8.1796, alpha=0.002, offline=50000, online=50549) next_base_action_source: base_copy=1 chunk_cached=135 chunk_refill=15
+2025-12-31 19:51:40,425 - INFO - Episode 230 (res_ep=130, xi=0.075, reward=0.00, steps=402, q=-8.39, critic=3.1606, actor=8.6512, alpha=0.002, offline=50000, online=55096) next_base_action_source: base_copy=1 chunk_cached=361 chunk_refill=40
+2025-12-31 19:54:20,984 - INFO - Episode 240 (res_ep=140, xi=0.081, reward=0.00, steps=489, q=-8.93, critic=3.3937, actor=9.1429, alpha=0.003, offline=50000, online=59194) next_base_action_source: base_copy=1 chunk_cached=440 chunk_refill=48
+2025-12-31 19:56:43,660 - INFO - Episode 250 (res_ep=150, xi=0.087, reward=1.00, steps=151, q=-9.37, critic=3.8563, actor=9.5905, alpha=0.003, offline=50000, online=62835) next_base_action_source: base_copy=1 chunk_cached=135 chunk_refill=15
+2025-12-31 19:58:24,332 - INFO - Episode 250 - Eval: {'success_rate': np.float64(0.1), 'mean_episode_length': np.float64(422.9), 'mean_reward': np.float64(0.1), 'probe_max_steps': 100, 'mean_probe_steps': 48.7}
+2025-12-31 20:01:17,022 - INFO - Episode 260 (res_ep=160, xi=0.091, reward=0.00, steps=458, q=-9.92, critic=4.3531, actor=10.1578, alpha=0.003, offline=50000, online=67552) next_base_action_source: base_copy=1 chunk_cached=412 chunk_refill=45
+2025-12-31 20:03:28,438 - INFO - Episode 270 (res_ep=170, xi=0.095, reward=1.00, steps=101, q=-10.33, critic=4.8780, actor=10.5103, alpha=0.003, offline=50000, online=70754) next_base_action_source: base_copy=1 chunk_cached=90 chunk_refill=10
+2025-12-31 20:06:12,829 - INFO - Episode 280 (res_ep=180, xi=0.098, reward=0.00, steps=497, q=-10.35, critic=3.9905, actor=10.6045, alpha=0.003, offline=50000, online=75143) next_base_action_source: base_copy=1 chunk_cached=447 chunk_refill=49
+2025-12-31 20:08:53,931 - INFO - Episode 290 (res_ep=190, xi=0.099, reward=0.00, steps=490, q=-9.93, critic=2.7189, actor=10.1312, alpha=0.003, offline=50000, online=79506) next_base_action_source: base_copy=1 chunk_cached=441 chunk_refill=48
+2025-12-31 20:11:42,629 - INFO - Episode 300 (res_ep=200, xi=0.100, reward=0.00, steps=435, q=-9.08, critic=1.7732, actor=9.2588, alpha=0.002, offline=50000, online=84100) next_base_action_source: base_copy=1 chunk_cached=391 chunk_refill=43
+2025-12-31 20:13:13,215 - INFO - Episode 300 - Eval: {'success_rate': np.float64(0.4), 'mean_episode_length': np.float64(361.7), 'mean_reward': np.float64(0.4), 'probe_max_steps': 100, 'mean_probe_steps': 59.7}
+2025-12-31 20:15:41,208 - INFO - Episode 310 (res_ep=210, xi=0.100, reward=0.00, steps=491, q=-8.28, critic=1.3936, actor=8.4390, alpha=0.002, offline=50000, online=88056) next_base_action_source: base_copy=1 chunk_cached=441 chunk_refill=49
+2025-12-31 20:17:52,836 - INFO - Episode 320 (res_ep=220, xi=0.100, reward=1.00, steps=107, q=-7.67, critic=1.0648, actor=7.8276, alpha=0.002, offline=50000, online=91383) next_base_action_source: base_copy=1 chunk_cached=96 chunk_refill=10
+2025-12-31 20:20:15,891 - INFO - Episode 330 (res_ep=230, xi=0.100, reward=1.00, steps=114, q=-7.12, critic=0.8826, actor=7.2765, alpha=0.002, offline=50000, online=94968) next_base_action_source: base_copy=1 chunk_cached=102 chunk_refill=11
+2025-12-31 20:22:46,183 - INFO - Episode 340 (res_ep=240, xi=0.100, reward=1.00, steps=147, q=-6.47, critic=0.7849, actor=6.5952, alpha=0.002, offline=50000, online=98906) next_base_action_source: base_copy=1 chunk_cached=132 chunk_refill=14
+2025-12-31 20:24:44,544 - INFO - Episode 350 (res_ep=250, xi=0.100, reward=0.00, steps=440, q=-6.10, critic=0.7047, actor=6.2244, alpha=0.002, offline=50000, online=101863) next_base_action_source: base_copy=1 chunk_cached=396 chunk_refill=43
+2025-12-31 20:26:16,930 - INFO - Episode 350 - Eval: {'success_rate': np.float64(0.3), 'mean_episode_length': np.float64(395.9), 'mean_reward': np.float64(0.3), 'probe_max_steps': 100, 'mean_probe_steps': 40.7}
+2025-12-31 20:27:58,558 - INFO - Episode 360 (res_ep=260, xi=0.100, reward=0.00, steps=422, q=-5.85, critic=0.6441, actor=5.9834, alpha=0.001, offline=50000, online=104206) next_base_action_source: base_copy=1 chunk_cached=379 chunk_refill=42
+2025-12-31 20:30:23,147 - INFO - Episode 370 (res_ep=270, xi=0.100, reward=0.00, steps=482, q=-5.50, critic=0.5740, actor=5.6076, alpha=0.001, offline=50000, online=107838) next_base_action_source: base_copy=1 chunk_cached=433 chunk_refill=48
+2025-12-31 20:32:52,624 - INFO - Episode 380 (res_ep=280, xi=0.100, reward=0.00, steps=412, q=-5.26, critic=0.5480, actor=5.3624, alpha=0.001, offline=50000, online=111689) next_base_action_source: base_copy=1 chunk_cached=370 chunk_refill=41
+2025-12-31 20:35:20,384 - INFO - Episode 390 (res_ep=290, xi=0.100, reward=0.00, steps=441, q=-4.99, critic=0.4617, actor=5.0846, alpha=0.001, offline=50000, online=115309) next_base_action_source: base_copy=1 chunk_cached=396 chunk_refill=44
+2025-12-31 20:36:52,661 - INFO - Episode 400 (res_ep=300, xi=0.100, reward=1.00, steps=159, q=-4.83, critic=0.4659, actor=4.9348, alpha=0.001, offline=50000, online=117418) next_base_action_source: base_copy=1 chunk_cached=142 chunk_refill=16
+2025-12-31 20:38:10,359 - INFO - Episode 400 - Eval: {'success_rate': np.float64(0.5), 'mean_episode_length': np.float64(303.9), 'mean_reward': np.float64(0.5), 'probe_max_steps': 100, 'mean_probe_steps': 59.8}
+2025-12-31 20:40:15,776 - INFO - Episode 410 (res_ep=310, xi=0.100, reward=1.00, steps=149, q=-4.65, critic=0.4234, actor=4.7482, alpha=0.001, offline=50000, online=120658) next_base_action_source: base_copy=1 chunk_cached=133 chunk_refill=15
+2025-12-31 20:41:46,963 - INFO - Episode 420 (res_ep=320, xi=0.100, reward=1.00, steps=145, q=-4.54, critic=0.4192, actor=4.6311, alpha=0.001, offline=50000, online=122909) next_base_action_source: base_copy=1 chunk_cached=130 chunk_refill=14
+2025-12-31 20:43:38,297 - INFO - Episode 430 (res_ep=330, xi=0.100, reward=1.00, steps=173, q=-4.35, critic=0.3224, actor=4.4638, alpha=0.001, offline=50000, online=125686) next_base_action_source: base_copy=1 chunk_cached=155 chunk_refill=17
+2025-12-31 20:45:23,078 - INFO - Episode 440 (res_ep=340, xi=0.100, reward=1.00, steps=97, q=-4.15, critic=0.2998, actor=4.2310, alpha=0.001, offline=50000, online=128166) next_base_action_source: base_copy=1 chunk_cached=86 chunk_refill=10
+2025-12-31 20:47:20,839 - INFO - Episode 450 (res_ep=350, xi=0.100, reward=1.00, steps=132, q=-3.91, critic=0.2754, actor=3.9966, alpha=0.001, offline=50000, online=131176) next_base_action_source: base_copy=1 chunk_cached=118 chunk_refill=13
+2025-12-31 20:48:19,819 - INFO - Episode 450 - Eval: {'success_rate': np.float64(0.8), 'mean_episode_length': np.float64(221.9), 'mean_reward': np.float64(0.8), 'probe_max_steps': 100, 'mean_probe_steps': 45.3}
+2025-12-31 20:50:09,698 - INFO - Episode 460 (res_ep=360, xi=0.100, reward=1.00, steps=279, q=-3.70, critic=0.2507, actor=3.7830, alpha=0.001, offline=50000, online=133823) next_base_action_source: base_copy=1 chunk_cached=250 chunk_refill=28
+2025-12-31 20:51:39,472 - INFO - Episode 470 (res_ep=370, xi=0.100, reward=1.00, steps=240, q=-3.54, critic=0.2321, actor=3.6184, alpha=0.001, offline=50000, online=135995) next_base_action_source: base_copy=1 chunk_cached=215 chunk_refill=24
+2025-12-31 20:53:25,752 - INFO - Episode 480 (res_ep=380, xi=0.100, reward=1.00, steps=225, q=-3.36, critic=0.2274, actor=3.4288, alpha=0.001, offline=50000, online=138702) next_base_action_source: base_copy=1 chunk_cached=202 chunk_refill=22
+2025-12-31 20:54:53,546 - INFO - Episode 490 (res_ep=390, xi=0.100, reward=1.00, steps=217, q=-3.23, critic=0.2085, actor=3.2984, alpha=0.001, offline=50000, online=140800) next_base_action_source: base_copy=1 chunk_cached=195 chunk_refill=21
+2025-12-31 20:56:18,909 - INFO - Episode 500 (res_ep=400, xi=0.100, reward=1.00, steps=221, q=-3.14, critic=0.2156, actor=3.2062, alpha=0.001, offline=50000, online=142817) next_base_action_source: base_copy=1 chunk_cached=198 chunk_refill=22
+2025-12-31 20:57:21,702 - INFO - Episode 500 - Eval: {'success_rate': np.float64(0.8), 'mean_episode_length': np.float64(234.2), 'mean_reward': np.float64(0.8), 'probe_max_steps': 100, 'mean_probe_steps': 53.7}
+2025-12-31 20:59:24,110 - INFO - Episode 510 (res_ep=410, xi=0.100, reward=1.00, steps=158, q=-3.00, critic=0.1988, actor=3.0775, alpha=0.001, offline=50000, online=145828) next_base_action_source: base_copy=1 chunk_cached=141 chunk_refill=16
+2025-12-31 21:01:04,035 - INFO - Episode 520 (res_ep=420, xi=0.100, reward=1.00, steps=208, q=-2.90, critic=0.1754, actor=2.9536, alpha=0.001, offline=50000, online=148207) next_base_action_source: base_copy=1 chunk_cached=187 chunk_refill=20
+2025-12-31 21:02:24,352 - INFO - Episode 530 (res_ep=430, xi=0.100, reward=1.00, steps=173, q=-2.81, critic=0.1549, actor=2.8863, alpha=0.001, offline=50000, online=150008) next_base_action_source: base_copy=1 chunk_cached=155 chunk_refill=17
+2025-12-31 21:03:54,340 - INFO - Episode 540 (res_ep=440, xi=0.100, reward=1.00, steps=158, q=-2.73, critic=0.1587, actor=2.7912, alpha=0.001, offline=50000, online=152038) next_base_action_source: base_copy=1 chunk_cached=142 chunk_refill=15
+2025-12-31 21:05:22,731 - INFO - Episode 550 (res_ep=450, xi=0.100, reward=1.00, steps=123, q=-2.63, critic=0.1522, actor=2.6956, alpha=0.001, offline=50000, online=154065) next_base_action_source: base_copy=1 chunk_cached=110 chunk_refill=12
+2025-12-31 21:06:41,681 - INFO - Episode 550 - Eval: {'success_rate': np.float64(0.5), 'mean_episode_length': np.float64(312.1), 'mean_reward': np.float64(0.5), 'probe_max_steps': 100, 'mean_probe_steps': 51.5}
+2025-12-31 21:07:58,100 - INFO - Episode 560 (res_ep=460, xi=0.100, reward=1.00, steps=207, q=-2.55, critic=0.1388, actor=2.6072, alpha=0.001, offline=50000, online=155796) next_base_action_source: base_copy=1 chunk_cached=186 chunk_refill=20
+2025-12-31 21:09:32,499 - INFO - Episode 570 (res_ep=470, xi=0.100, reward=1.00, steps=210, q=-2.45, critic=0.1251, actor=2.5078, alpha=0.001, offline=50000, online=158024) next_base_action_source: base_copy=1 chunk_cached=188 chunk_refill=21
+2025-12-31 21:11:27,137 - INFO - Episode 580 (res_ep=480, xi=0.100, reward=1.00, steps=151, q=-2.36, critic=0.1155, actor=2.4094, alpha=0.001, offline=50000, online=160833) next_base_action_source: base_copy=1 chunk_cached=135 chunk_refill=15
+2025-12-31 21:12:51,507 - INFO - Episode 590 (res_ep=490, xi=0.100, reward=1.00, steps=203, q=-2.29, critic=0.1159, actor=2.3421, alpha=0.001, offline=50000, online=162736) next_base_action_source: base_copy=1 chunk_cached=182 chunk_refill=20
+2025-12-31 21:14:09,234 - INFO - Episode 600 (res_ep=500, xi=0.100, reward=1.00, steps=294, q=-2.22, critic=0.1098, actor=2.2729, alpha=0.001, offline=50000, online=164451) next_base_action_source: base_copy=1 chunk_cached=264 chunk_refill=29
+2025-12-31 21:15:07,893 - INFO - Episode 600 - Eval: {'success_rate': np.float64(0.8), 'mean_episode_length': np.float64(204.2), 'mean_reward': np.float64(0.8), 'probe_max_steps': 100, 'mean_probe_steps': 60.8}
+2025-12-31 21:16:52,682 - INFO - Episode 610 (res_ep=510, xi=0.100, reward=1.00, steps=148, q=-2.13, critic=0.0995, actor=2.1699, alpha=0.001, offline=50000, online=166964) next_base_action_source: base_copy=1 chunk_cached=133 chunk_refill=14
+2025-12-31 21:18:29,875 - INFO - Episode 620 (res_ep=520, xi=0.100, reward=1.00, steps=127, q=-2.07, critic=0.0948, actor=2.1169, alpha=0.001, offline=50000, online=169277) next_base_action_source: base_copy=1 chunk_cached=113 chunk_refill=13
+2025-12-31 21:20:13,334 - INFO - Episode 630 (res_ep=530, xi=0.100, reward=1.00, steps=161, q=-1.98, critic=0.0904, actor=2.0308, alpha=0.001, offline=50000, online=171702) next_base_action_source: base_copy=1 chunk_cached=144 chunk_refill=16
+2025-12-31 21:21:52,884 - INFO - Episode 640 (res_ep=540, xi=0.100, reward=1.00, steps=208, q=-1.93, critic=0.0895, actor=1.9772, alpha=0.001, offline=50000, online=174038) next_base_action_source: base_copy=1 chunk_cached=187 chunk_refill=20
+2025-12-31 21:23:53,887 - INFO - Episode 650 (res_ep=550, xi=0.100, reward=1.00, steps=198, q=-1.85, critic=0.0777, actor=1.9041, alpha=0.001, offline=50000, online=177112) next_base_action_source: base_copy=1 chunk_cached=178 chunk_refill=19
+2025-12-31 21:25:07,515 - INFO - Episode 650 - Eval: {'success_rate': np.float64(0.6), 'mean_episode_length': np.float64(286.0), 'mean_reward': np.float64(0.6), 'probe_max_steps': 100, 'mean_probe_steps': 46.7}
+2025-12-31 21:27:01,890 - INFO - Episode 660 (res_ep=560, xi=0.100, reward=1.00, steps=219, q=-1.79, critic=0.0819, actor=1.8261, alpha=0.001, offline=50000, online=179761) next_base_action_source: base_copy=1 chunk_cached=197 chunk_refill=21
+2025-12-31 21:29:16,940 - INFO - Episode 670 (res_ep=570, xi=0.100, reward=1.00, steps=164, q=-1.73, critic=0.0765, actor=1.7783, alpha=0.001, offline=50000, online=183055) next_base_action_source: base_copy=1 chunk_cached=147 chunk_refill=16
+2025-12-31 21:31:21,107 - INFO - Episode 680 (res_ep=580, xi=0.100, reward=1.00, steps=140, q=-1.69, critic=0.0763, actor=1.7222, alpha=0.001, offline=50000, online=185962) next_base_action_source: base_copy=1 chunk_cached=125 chunk_refill=14
+2025-12-31 21:32:56,589 - INFO - Episode 690 (res_ep=590, xi=0.100, reward=1.00, steps=125, q=-1.66, critic=0.0729, actor=1.7028, alpha=0.001, offline=50000, online=188220) next_base_action_source: base_copy=1 chunk_cached=111 chunk_refill=13
+2025-12-31 21:34:27,425 - INFO - Episode 700 (res_ep=600, xi=0.100, reward=1.00, steps=215, q=-1.65, critic=0.0763, actor=1.6898, alpha=0.001, offline=50000, online=190242) next_base_action_source: base_copy=1 chunk_cached=192 chunk_refill=22
+2025-12-31 21:35:41,185 - INFO - Episode 700 - Eval: {'success_rate': np.float64(0.7), 'mean_episode_length': np.float64(299.5), 'mean_reward': np.float64(0.7), 'probe_max_steps': 100, 'mean_probe_steps': 35.7}
+2025-12-31 21:36:54,988 - INFO - Episode 710 (res_ep=610, xi=0.100, reward=1.00, steps=141, q=-1.63, critic=0.0697, actor=1.6750, alpha=0.001, offline=50000, online=191757) next_base_action_source: base_copy=1 chunk_cached=126 chunk_refill=14
+2025-12-31 21:38:21,137 - INFO - Episode 720 (res_ep=620, xi=0.100, reward=1.00, steps=461, q=-1.61, critic=0.0700, actor=1.6487, alpha=0.001, offline=50000, online=193644) next_base_action_source: base_copy=1 chunk_cached=414 chunk_refill=46
+2025-12-31 21:39:53,523 - INFO - Episode 730 (res_ep=630, xi=0.100, reward=1.00, steps=132, q=-1.61, critic=0.0779, actor=1.6502, alpha=0.001, offline=50000, online=195653) next_base_action_source: base_copy=1 chunk_cached=118 chunk_refill=13
+2025-12-31 21:42:10,647 - INFO - Episode 740 (res_ep=640, xi=0.100, reward=0.00, steps=412, q=-1.60, critic=0.0703, actor=1.6465, alpha=0.001, offline=50000, online=199055) next_base_action_source: base_copy=1 chunk_cached=370 chunk_refill=41
+2025-12-31 21:43:48,830 - INFO - Episode 750 (res_ep=650, xi=0.100, reward=1.00, steps=127, q=-1.60, critic=0.0682, actor=1.6441, alpha=0.001, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=113 chunk_refill=13
+2025-12-31 21:45:12,707 - INFO - Episode 750 - Eval: {'success_rate': np.float64(0.4), 'mean_episode_length': np.float64(344.1), 'mean_reward': np.float64(0.4), 'probe_max_steps': 100, 'mean_probe_steps': 43.8}
+2025-12-31 21:47:00,179 - INFO - Episode 760 (res_ep=660, xi=0.100, reward=1.00, steps=202, q=-1.59, critic=0.0698, actor=1.6303, alpha=0.001, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=181 chunk_refill=20
+2025-12-31 21:48:49,070 - INFO - Episode 770 (res_ep=670, xi=0.100, reward=0.00, steps=460, q=-1.59, critic=0.0698, actor=1.6397, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=414 chunk_refill=45
+2025-12-31 21:50:36,765 - INFO - Episode 780 (res_ep=680, xi=0.100, reward=1.00, steps=122, q=-1.59, critic=0.0742, actor=1.6317, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=108 chunk_refill=13
+2025-12-31 21:52:22,873 - INFO - Episode 790 (res_ep=690, xi=0.100, reward=1.00, steps=193, q=-1.59, critic=0.0639, actor=1.6306, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=173 chunk_refill=19
+2025-12-31 21:54:14,408 - INFO - Episode 800 (res_ep=700, xi=0.100, reward=1.00, steps=159, q=-1.59, critic=0.0616, actor=1.6218, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=142 chunk_refill=16
+2025-12-31 21:55:11,635 - INFO - Episode 800 - Eval: {'success_rate': np.float64(0.9), 'mean_episode_length': np.float64(201.5), 'mean_reward': np.float64(0.9), 'probe_max_steps': 100, 'mean_probe_steps': 45.1}
+2025-12-31 21:55:11,657 - INFO - New best success rate: 90.00%
+2025-12-31 21:57:01,478 - INFO - Episode 810 (res_ep=710, xi=0.100, reward=1.00, steps=192, q=-1.59, critic=0.0631, actor=1.6321, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=172 chunk_refill=19
+2025-12-31 21:59:01,214 - INFO - Episode 820 (res_ep=720, xi=0.100, reward=1.00, steps=171, q=-1.60, critic=0.0643, actor=1.6382, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=153 chunk_refill=17
+2025-12-31 22:00:39,478 - INFO - Episode 830 (res_ep=730, xi=0.100, reward=1.00, steps=151, q=-1.59, critic=0.0596, actor=1.6222, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=135 chunk_refill=15
+2025-12-31 22:02:24,649 - INFO - Episode 840 (res_ep=740, xi=0.100, reward=1.00, steps=173, q=-1.58, critic=0.0616, actor=1.6142, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=155 chunk_refill=17
+2025-12-31 22:03:54,629 - INFO - Episode 850 (res_ep=750, xi=0.100, reward=1.00, steps=188, q=-1.58, critic=0.0611, actor=1.6193, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=169 chunk_refill=18
+2025-12-31 22:05:05,198 - INFO - Episode 850 - Eval: {'success_rate': np.float64(0.7), 'mean_episode_length': np.float64(284.6), 'mean_reward': np.float64(0.7), 'probe_max_steps': 100, 'mean_probe_steps': 25.7}
+2025-12-31 22:06:31,814 - INFO - Episode 860 (res_ep=760, xi=0.100, reward=1.00, steps=171, q=-1.59, critic=0.0613, actor=1.6364, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=153 chunk_refill=17
+2025-12-31 22:08:11,607 - INFO - Episode 870 (res_ep=770, xi=0.100, reward=1.00, steps=210, q=-1.59, critic=0.0575, actor=1.6218, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=189 chunk_refill=20
+2025-12-31 22:09:51,932 - INFO - Episode 880 (res_ep=780, xi=0.100, reward=0.00, steps=480, q=-1.58, critic=0.0597, actor=1.6228, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=432 chunk_refill=47
+2025-12-31 22:11:31,577 - INFO - Episode 890 (res_ep=790, xi=0.100, reward=1.00, steps=263, q=-1.58, critic=0.0566, actor=1.6139, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=235 chunk_refill=27
+2025-12-31 22:12:55,941 - INFO - Episode 900 (res_ep=800, xi=0.100, reward=0.00, steps=490, q=-1.56, critic=0.0574, actor=1.6013, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=441 chunk_refill=48
+2025-12-31 22:13:51,640 - INFO - Episode 900 - Eval: {'success_rate': np.float64(0.9), 'mean_episode_length': np.float64(196.5), 'mean_reward': np.float64(0.9), 'probe_max_steps': 100, 'mean_probe_steps': 42.4}
+2025-12-31 22:16:03,243 - INFO - Episode 910 (res_ep=810, xi=0.100, reward=1.00, steps=188, q=-1.54, critic=0.0543, actor=1.5781, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=168 chunk_refill=19
+2025-12-31 22:17:34,366 - INFO - Episode 920 (res_ep=820, xi=0.100, reward=1.00, steps=162, q=-1.52, critic=0.0519, actor=1.5550, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=145 chunk_refill=16
+2025-12-31 22:18:51,189 - INFO - Episode 930 (res_ep=830, xi=0.100, reward=1.00, steps=158, q=-1.51, critic=0.0489, actor=1.5353, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=141 chunk_refill=16
+2025-12-31 22:20:41,465 - INFO - Episode 940 (res_ep=840, xi=0.100, reward=0.00, steps=480, q=-1.48, critic=0.0504, actor=1.5139, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=432 chunk_refill=47
+2025-12-31 22:22:16,412 - INFO - Episode 950 (res_ep=850, xi=0.100, reward=1.00, steps=170, q=-1.45, critic=0.0480, actor=1.4871, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=153 chunk_refill=16
+2025-12-31 22:23:39,655 - INFO - Episode 950 - Eval: {'success_rate': np.float64(0.6), 'mean_episode_length': np.float64(328.7), 'mean_reward': np.float64(0.6), 'probe_max_steps': 100, 'mean_probe_steps': 40.0}
+2025-12-31 22:25:15,753 - INFO - Episode 960 (res_ep=860, xi=0.100, reward=1.00, steps=194, q=-1.43, critic=0.0455, actor=1.4651, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=174 chunk_refill=19
+2025-12-31 22:26:49,363 - INFO - Episode 970 (res_ep=870, xi=0.100, reward=1.00, steps=120, q=-1.40, critic=0.0471, actor=1.4358, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=107 chunk_refill=12
+2025-12-31 22:28:50,764 - INFO - Episode 980 (res_ep=880, xi=0.100, reward=1.00, steps=198, q=-1.38, critic=0.0439, actor=1.4145, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=177 chunk_refill=20
+2025-12-31 22:30:25,925 - INFO - Episode 990 (res_ep=890, xi=0.100, reward=1.00, steps=206, q=-1.37, critic=0.0436, actor=1.3967, alpha=0.000, offline=50000, online=200000) next_base_action_source: base_copy=1 chunk_cached=185 chunk_refill=20
+2025-12-31 22:32:22,630 - INFO - Training complete. Best success rate: 90.00%
+2025-12-31 22:32:23,108 - INFO - Done!

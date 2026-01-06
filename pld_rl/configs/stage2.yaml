@@ -24,6 +24,7 @@ residual_std_max: 5.0
 # === Cal-QL (unused in stage 2, kept for config parity) ===
 calql_num_policy_actions: 10
 calql_alpha: 1.0
+calql_lse_beta: 1.0
 calql_td_xi: 0.0
 calql_conservative_xi: 0.05
 

@@ -48,6 +48,7 @@ class PLDConfig:
     xi_init: float = 0.01
     xi_final: float = 0.3
     xi_warmup_episodes: int = 400
+    xi_start_train: float | None = None
 
     # === Buffer ===
     offline_buffer_capacity: int = 50000
@@ -61,6 +62,7 @@ class PLDConfig:
     calql_pretrain_steps: int = 5000
     calql_num_policy_actions: int = 10
     calql_alpha: float = 1.0
+    calql_lse_beta: float = 1.0
     calql_td_xi: float = 0.0
     calql_conservative_xi: float = 0.05
     max_episodes: int = 1000

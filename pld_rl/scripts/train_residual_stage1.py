@@ -602,6 +602,9 @@ def train_residual_rl(
         # Get current xi based on residual-active episode index.
         res_episode = max(0, episode - config.warmup_episodes)
         xi = xi_scheduler.get(res_episode)
+        if episode >= config.warmup_episodes and config.xi_start_train is not None:
+            xi = max(xi, config.xi_start_train)
+            xi = min(xi, config.xi_final)
 
         episode_reward = 0.0
         episode_steps = 0

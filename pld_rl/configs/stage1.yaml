@@ -39,7 +39,7 @@ grad_clip_norm: 1.0
 residual_penalty_weight: 0.001
 
 # === Residual Scale Schedule ===
-xi_init: 0.05
+xi_init: 0.1
 xi_final: 0.3
 xi_warmup_episodes: 400
 
@@ -55,6 +55,7 @@ critic_actor_update_ratio: 2
 calql_pretrain_steps: 5000
 calql_num_policy_actions: 10
 calql_alpha: 1.0
+calql_lse_beta: 1.0
 calql_td_xi: 0.0
 calql_conservative_xi: 0.05
 max_episodes: 1000

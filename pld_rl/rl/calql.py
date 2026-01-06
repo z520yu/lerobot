@@ -1,5 +1,6 @@
 """Cal-QL Style Critic Pretraining."""
 
+import math
 import torch
 import torch.nn.functional as F
 
@@ -103,9 +104,20 @@ class CalQLPretrainer:
         q1_pi = torch.maximum(q1_pi, v_mu)
         q2_pi = torch.maximum(q2_pi, v_mu)
 
+        beta = float(self.config.calql_lse_beta)
+        if beta <= 0.0:
+            q1_pi_agg = q1_pi.mean(dim=1)
+            q2_pi_agg = q2_pi.mean(dim=1)
+        else:
+            q1_pi_agg = torch.logsumexp(beta * q1_pi, dim=1) / beta
+            q2_pi_agg = torch.logsumexp(beta * q2_pi, dim=1) / beta
+            norm = math.log(num_policy_actions) / beta
+            q1_pi_agg = q1_pi_agg - norm
+            q2_pi_agg = q2_pi_agg - norm
+
         calql_loss = 0.5 * (
-            q1_pi.mean() - q1.mean() +
-            q2_pi.mean() - q2.mean()
+            q1_pi_agg.mean() - q1.mean() +
+            q2_pi_agg.mean() - q2.mean()
         )
 
         # Total loss
