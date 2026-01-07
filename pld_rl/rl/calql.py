@@ -74,10 +74,24 @@ class CalQLPretrainer:
 
         # === TD Loss ===
         with torch.no_grad():
-            next_delta_raw, _, _ = self.policy(next_obs, next_base_action)
+            next_delta_raw, next_log_prob_raw, _ = self.policy(
+                next_obs, next_base_action
+            )
+            if next_log_prob_raw.dim() > 1:
+                next_log_prob_raw = next_log_prob_raw.sum(dim=-1)
             next_action = self.policy.compose_action(next_base_action, next_delta_raw, td_xi)
+            next_log_prob = self.policy.log_prob_action(
+                next_log_prob_raw, next_delta_raw
+            )
             target_q1, target_q2 = self.target_critic(next_obs, next_action)
             target_q = torch.min(target_q1, target_q2)
+            alpha = torch.as_tensor(
+                self.config.temperature_init,
+                device=target_q.device,
+                dtype=target_q.dtype,
+            )
+            if td_xi > 0.0:
+                target_q = target_q - alpha * next_log_prob
             target_value = reward + (1 - done) * self.config.discount * target_q
 
         q1, q2 = self.critic(obs, action)

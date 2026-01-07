@@ -62,6 +62,7 @@ class SACResidualTrainer:
         self,
         batch: dict[str, torch.Tensor],
         xi: float,
+        xi_next: float | None = None,
         update_actor: bool = True,
     ) -> dict[str, float]:
         """
@@ -70,6 +71,7 @@ class SACResidualTrainer:
         Args:
             batch: sampled batch from replay buffer
             xi: current residual scale coefficient
+            xi_next: residual scale for next-state target (defaults to xi)
             update_actor: whether to update actor (for critic:actor ratio)
 
         Returns:
@@ -81,6 +83,9 @@ class SACResidualTrainer:
         reward = batch["reward"].to(self.device).float().view(-1)
         next_obs = batch["next_obs"].to(self.device)
         done = batch["done"].to(self.device).float().view(-1)
+
+        if xi_next is None:
+            xi_next = xi
 
         # === Critic Update ===
         with torch.no_grad():
@@ -99,12 +104,16 @@ class SACResidualTrainer:
             if next_log_prob_raw.dim() > 1:
                 next_log_prob_raw = next_log_prob_raw.sum(dim=-1)
 
-            next_action = self.policy.compose_action(next_base_action, next_delta_raw, xi)
-            next_log_prob = self.policy.log_prob_action(next_log_prob_raw, next_delta_raw)
+            next_action = self.policy.compose_action(
+                next_base_action, next_delta_raw, xi_next
+            )
+            next_log_prob = self.policy.log_prob_action(
+                next_log_prob_raw, next_delta_raw
+            )
 
             target_q1, target_q2 = self.target_critic(next_obs, next_action)
             target_q = torch.min(target_q1, target_q2)
-            # Entropy regularization in residual space.
+            # Entropy regularization in residual space (no xi scaling correction).
             target_q = target_q - self.alpha.detach() * next_log_prob
             target_q_mean = target_q.mean().item()
             target_value = reward + (1 - done) * self.config.discount * target_q

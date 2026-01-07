@@ -33,7 +33,7 @@ discount: 0.99
 tau: 0.005
 actor_lr: 3.0e-4
 critic_lr: 3.0e-4
-temperature_init: 1.0
+temperature_init: 0.1
 log_alpha_min: -6.9
 grad_clip_norm: 1.0
 residual_penalty_weight: 0.001
@@ -52,7 +52,7 @@ batch_size: 256
 warmup_episodes: 100
 probe_max_steps: 100
 critic_actor_update_ratio: 2
-calql_pretrain_steps: 5000
+calql_pretrain_steps: 20000
 calql_num_policy_actions: 10
 calql_alpha: 1.0
 calql_lse_beta: 1.0

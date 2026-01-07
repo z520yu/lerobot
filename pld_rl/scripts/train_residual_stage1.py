@@ -582,6 +582,11 @@ def train_residual_rl(
 
     total_steps = 0
     best_success_rate = 0.0
+    log_steps = 0
+    log_done = 0
+    log_terminated = 0
+    log_truncated = 0
+    log_success = 0
 
     start_episode = max(0, min(start_episode, config.max_episodes))
     pbar = tqdm(range(start_episode, config.max_episodes), desc="Training")
@@ -639,6 +644,11 @@ def train_residual_rl(
 
             next_obs, reward, terminated, truncated, info = env.step(exec_action)
             done = terminated or truncated
+            log_steps += 1
+            log_done += int(done)
+            log_terminated += int(terminated)
+            log_truncated += int(truncated)
+            log_success += int(info.get("success", False))
 
             next_obs_rl = adapter.single_obs_to_rl_latent(next_obs)
 
@@ -663,7 +673,9 @@ def train_residual_rl(
                 for update_idx in range(config.critic_actor_update_ratio):
                     batch = replay_buffer.sample(config.batch_size)
                     update_actor = (update_idx == config.critic_actor_update_ratio - 1)
-                    losses = trainer.update(batch, xi, update_actor=update_actor)
+                    losses = trainer.update(
+                        batch, xi, xi_next=xi, update_actor=update_actor
+                    )
                     losses_episode.append(losses)
 
             episode_reward += reward
@@ -729,6 +741,20 @@ def train_residual_rl(
                 source_counts["chunk_cached"],
                 source_counts["chunk_refill"],
             )
+            done_ratio = log_done / log_steps if log_steps > 0 else float("nan")
+            logger.info(
+                "Termination stats: done_ratio=%.4f terminated=%d truncated=%d success=%d steps=%d",
+                done_ratio,
+                log_terminated,
+                log_truncated,
+                log_success,
+                log_steps,
+            )
+            log_steps = 0
+            log_done = 0
+            log_terminated = 0
+            log_truncated = 0
+            log_success = 0
 
         # Evaluation
         if episode > 0 and episode % config.eval_freq == 0:

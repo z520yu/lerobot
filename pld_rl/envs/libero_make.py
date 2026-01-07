@@ -181,10 +181,11 @@ class LiberoGymnasiumWrapper(gym.Env):
         if len(result) == 4:
             # Old Gym API
             obs, reward, done, info = result
+            terminated = bool(done)
+            truncated = False
         else:
             # New Gymnasium API
-            obs, reward, _, _, info = result
-            done = False
+            obs, reward, terminated, truncated, info = result
 
         # Check success using LIBERO's check_success() method
         # Reference: lerobot/src/lerobot/envs/libero.py line 311
@@ -199,11 +200,11 @@ class LiberoGymnasiumWrapper(gym.Env):
         info["success"] = is_success  # Keep for backwards compatibility
 
         # Determine terminated/truncated
-        terminated = done or is_success
-        truncated = False
+        terminated = bool(terminated) or is_success
+        truncated = bool(truncated)
 
         # Check for max steps truncation
-        if self._step_count >= self.max_episode_steps and not terminated:
+        if self._step_count >= self.max_episode_steps and not (terminated or truncated):
             truncated = True
 
         # Normalize observation

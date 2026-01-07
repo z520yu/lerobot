@@ -78,11 +78,31 @@ class ResidualGaussianPolicy(nn.Module):
         self,
         log_prob_raw: torch.Tensor,
         delta_raw: torch.Tensor,
+        xi: float | torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Log-prob under tanh-residual in residual space."""
+        """Log-prob under tanh-residual (optionally includes xi scaling)."""
         eps = self._TANH_EPS
         log_det = torch.log(1 - torch.tanh(delta_raw).pow(2) + eps).sum(-1)
-        return log_prob_raw - log_det
+        log_prob = log_prob_raw - log_det
+        if xi is None:
+            return log_prob
+
+        xi_tensor = torch.as_tensor(
+            xi, device=delta_raw.device, dtype=delta_raw.dtype
+        )
+        xi_tensor = torch.clamp(xi_tensor, min=eps)
+        if xi_tensor.dim() == 0:
+            log_xi = xi_tensor.log() * delta_raw.shape[-1]
+        elif xi_tensor.shape == delta_raw.shape:
+            log_xi = xi_tensor.log().sum(-1)
+        elif xi_tensor.dim() == 1 and xi_tensor.shape[0] == delta_raw.shape[0]:
+            log_xi = xi_tensor.log() * delta_raw.shape[-1]
+        else:
+            log_xi = xi_tensor.log()
+            while log_xi.dim() < delta_raw.dim():
+                log_xi = log_xi.unsqueeze(-1)
+            log_xi = log_xi.expand_as(delta_raw).sum(-1)
+        return log_prob - log_xi
 
     def forward(
         self,
