@@ -68,6 +68,7 @@ class PLDConfig:
     max_episodes: int = 1000
     eval_freq: int = 50
     eval_probe_max_steps: int = 0
+    eval_num_episodes: int = 10
     save_freq: int = 100
     log_freq: int = 10
 

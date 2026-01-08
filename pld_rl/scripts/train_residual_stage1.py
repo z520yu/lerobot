@@ -704,17 +704,21 @@ def train_residual_rl(
             avg_alpha = _mean_loss(losses_episode, "alpha")
             avg_log_prob_used = _mean_loss(losses_episode, "log_prob_used")
             avg_log_prob_raw = _mean_loss(losses_episode, "log_prob_raw")
+            avg_delta_abs = _mean_loss(losses_episode, "delta_raw_abs_mean")
+            avg_delta_tanh_abs = _mean_loss(losses_episode, "delta_tanh_abs_mean")
             avg_delta_std = _mean_loss(losses_episode, "delta_raw_std")
             avg_delta_clip = _mean_loss(losses_episode, "delta_raw_clip_frac")
             avg_action_clamp = _mean_loss(losses_episode, "action_clamp_frac")
             avg_residual_l1 = _mean_loss(losses_episode, "residual_l1")
+            avg_actor_grad_norm = _mean_loss(losses_episode, "actor_grad_norm")
             avg_base_min = _mean_loss(losses_episode, "base_action_min")
             avg_base_max = _mean_loss(losses_episode, "base_action_max")
             logger.info(
                 "Episode %d (res_ep=%d, xi=%.3f, reward=%.2f, steps=%d, q=%.2f, "
                 "target_q=%.2f, critic=%.4f, actor=%.4f, alpha=%.3f, log_prob_used=%.3f, "
-                "log_prob_raw=%.3f, delta_std=%.3f, delta_clip=%.2f, act_clamp=%.2f, "
-                "res_l1=%.3f, "
+                "log_prob_raw=%.3f, delta_abs=%.3f, tanh_abs=%.3f, "
+                "delta_std=%.3f, delta_clip=%.2f, act_clamp=%.2f, "
+                "res_l1=%.3f, actor_grad=%.3f, "
                 "base_min=%.2f, base_max=%.2f, offline=%d, online=%d) "
                 "next_base_action_source: base_copy=%d chunk_cached=%d chunk_refill=%d",
                 episode,
@@ -729,10 +733,13 @@ def train_residual_rl(
                 avg_alpha,
                 avg_log_prob_used,
                 avg_log_prob_raw,
+                avg_delta_abs,
+                avg_delta_tanh_abs,
                 avg_delta_std,
                 avg_delta_clip,
                 avg_action_clamp,
                 avg_residual_l1,
+                avg_actor_grad_norm,
                 avg_base_min,
                 avg_base_max,
                 replay_buffer.offline_size,
@@ -763,7 +770,7 @@ def train_residual_rl(
             eval_metrics = evaluate_policy(
                 env, base_wrapper, trainer.policy, adapter,
                 config, eval_xi, probe_max_steps=config.eval_probe_max_steps,
-                num_episodes=10, task_text=task_text,
+                num_episodes=config.eval_num_episodes, task_text=task_text,
             )
             warmup_tag = " (warmup eval)" if is_warmup_eval else ""
             logger.info(f"Episode {episode} - Eval{warmup_tag}: {eval_metrics}")

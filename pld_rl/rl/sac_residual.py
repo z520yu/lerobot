@@ -159,7 +159,7 @@ class SACResidualTrainer:
 
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
-            torch.nn.utils.clip_grad_norm_(
+            actor_grad_norm = torch.nn.utils.clip_grad_norm_(
                 self.policy.parameters(), self.config.grad_clip_norm
             )
             self.actor_optimizer.step()
@@ -184,7 +184,10 @@ class SACResidualTrainer:
                 xi_tensor = torch.as_tensor(
                     xi, device=delta_raw_detached.device, dtype=delta_raw_detached.dtype
                 )
-                pre_action = base_action_detached + xi_tensor * torch.tanh(delta_raw_detached)
+                delta_tanh = torch.tanh(delta_raw_detached)
+                pre_action = base_action_detached + xi_tensor * delta_tanh
+                delta_raw_abs_mean = delta_raw_detached.abs().mean().item()
+                delta_tanh_abs_mean = delta_tanh.abs().mean().item()
                 delta_raw_std = delta_raw_detached.std(unbiased=False).item()
                 delta_raw_clip_frac = (
                     (delta_raw_detached.abs() > 1.0).float().mean().item()
@@ -205,10 +208,13 @@ class SACResidualTrainer:
                 "xi": xi,
                 "log_prob_used": log_prob_used,
                 "log_prob_raw": log_prob_raw_mean,
+                "delta_raw_abs_mean": delta_raw_abs_mean,
+                "delta_tanh_abs_mean": delta_tanh_abs_mean,
                 "delta_raw_std": delta_raw_std,
                 "delta_raw_clip_frac": delta_raw_clip_frac,
                 "action_clamp_frac": action_clamp_frac,
                 "residual_l1": residual_l1,
+                "actor_grad_norm": actor_grad_norm.item(),
                 "base_action_min": base_action_min,
                 "base_action_max": base_action_max,
             })
