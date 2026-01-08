@@ -35,6 +35,7 @@ actor_lr: 3.0e-4
 critic_lr: 3.0e-4
 temperature_init: 0.1
 log_alpha_min: -6.9
+target_entropy: 3.5
 grad_clip_norm: 1.0
 residual_penalty_weight: 0.001
 
@@ -80,7 +81,7 @@ tokenizer_max_length: 200
 
 # === Output ===
 output_dir: "./outputs/pld_rl_stage1"
-log_file: "/home/yu_zhang/lerobot/pld_rl/train.log"
+log_file: "train.log"
 log_mode: "w"
 buffer_cache_dir: "/home/yu_zhang/lerobot/outputs"
 seed: 42
