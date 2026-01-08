@@ -35,13 +35,13 @@ actor_lr: 3.0e-4
 critic_lr: 3.0e-4
 temperature_init: 1.0
 log_alpha_min: -6.9
-target_entropy: 3.5
+target_entropy: 4.5
 grad_clip_norm: 1.0
 residual_penalty_weight: 0.001
 
 # === Residual Scale Schedule ===
 xi_init: 0.1
-xi_final: 0.3
+xi_final: 0.1
 xi_warmup_episodes: 400
 
 # === Buffer ===
