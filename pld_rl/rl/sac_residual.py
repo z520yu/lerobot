@@ -145,6 +145,9 @@ class SACResidualTrainer:
             new_action = self.policy.compose_action(base_action, delta_raw, xi)
             log_prob = self.policy.log_prob_action(log_prob_raw, delta_raw)
             q_new = self.critic.q_min(obs, new_action)
+            q_res_mean = q_new.mean().item()
+            with torch.no_grad():
+                q_base_mean = self.critic.q_min(obs, base_action).mean().item()
             xi_tensor = torch.as_tensor(
                 xi, device=delta_raw.device, dtype=delta_raw.dtype
             )
@@ -208,6 +211,8 @@ class SACResidualTrainer:
                 "xi": xi,
                 "log_prob_used": log_prob_used,
                 "log_prob_raw": log_prob_raw_mean,
+                "q_base": q_base_mean,
+                "q_res": q_res_mean,
                 "delta_raw_abs_mean": delta_raw_abs_mean,
                 "delta_tanh_abs_mean": delta_tanh_abs_mean,
                 "delta_raw_std": delta_raw_std,

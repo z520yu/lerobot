@@ -24,9 +24,11 @@ from pld_rl.envs.libero_make import make_libero_env
 from pld_rl.policies.pi05_base_wrapper import PI05BaseWrapper
 from pld_rl.policies.residual_gaussian import ResidualGaussianPolicy
 
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format=LOG_FORMAT,
     force=True,
 )
 logger = logging.getLogger(__name__)
@@ -39,6 +41,22 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _configure_logging(log_file: str | None, log_mode: str, no_console: bool) -> None:
+    if not log_file:
+        return
+    log_path = Path(log_file).expanduser()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handlers = [logging.FileHandler(log_path, mode=log_mode)]
+    if not no_console:
+        handlers.append(logging.StreamHandler())
+    logging.basicConfig(
+        level=logging.INFO,
+        format=LOG_FORMAT,
+        handlers=handlers,
+        force=True,
+    )
 
 
 def _run_probe_steps(
@@ -103,6 +121,7 @@ def evaluate_base_only(
     config: PLDConfig,
     num_episodes: int = 50,
     probe_max_steps: int = 0,
+    step_log: bool = False,
     task_text: str = "",
 ) -> dict:
     """Evaluate base policy only."""
@@ -127,10 +146,17 @@ def evaluate_base_only(
                 env, base_wrapper, adapter, obs, task_text_ep, probe_max_steps
             )
             if terminated or truncated:
+                if step_log:
+                    logger.info(
+                        "eval_base skip after probe: terminated=%d truncated=%d",
+                        terminated,
+                        truncated,
+                    )
                 continue
 
         episode_reward = 0.0
         episode_length = 0
+        episode_id = len(successes)
 
         for t in range(config.env_max_steps - probe_steps):
             batch = adapter.env_obs_to_batch(obs, task_text_ep)
@@ -142,6 +168,18 @@ def evaluate_base_only(
             episode_reward += reward
             episode_length += 1
             obs = next_obs
+            if step_log:
+                logger.info(
+                    "eval_base_step ep=%d step=%d reward=%.3f terminated=%d truncated=%d "
+                    "success=%s action=%s",
+                    episode_id,
+                    t,
+                    reward,
+                    terminated,
+                    truncated,
+                    info.get("success", False),
+                    np.array2string(action, precision=3, floatmode="fixed"),
+                )
 
             if done:
                 break
@@ -151,6 +189,14 @@ def evaluate_base_only(
         total_rewards.append(episode_reward)
         if probe_max_steps > 0:
             probe_steps_all.append(probe_steps)
+        if step_log:
+            logger.info(
+                "eval_base_end ep=%d reward=%.3f length=%d success=%s",
+                episode_id,
+                episode_reward,
+                episode_length,
+                info.get("success", False),
+            )
         pbar.update(1)
 
     pbar.close()
@@ -179,6 +225,7 @@ def evaluate_residual(
     num_episodes: int = 50,
     probe_max_steps: int = 0,
     deterministic: bool = True,
+    step_log: bool = False,
     task_text: str = "",
 ) -> dict:
     """Evaluate base + residual policy."""
@@ -203,10 +250,17 @@ def evaluate_residual(
                 env, base_wrapper, adapter, obs, task_text_ep, probe_max_steps
             )
             if terminated or truncated:
+                if step_log:
+                    logger.info(
+                        "eval_residual skip after probe: terminated=%d truncated=%d",
+                        terminated,
+                        truncated,
+                    )
                 continue
 
         episode_reward = 0.0
         episode_length = 0
+        episode_id = len(successes)
 
         for t in range(config.env_max_steps - probe_steps):
             batch = adapter.env_obs_to_batch(obs, task_text_ep)
@@ -216,11 +270,24 @@ def evaluate_residual(
             obs_rl = adapter.single_obs_to_rl_latent(obs)
             obs_tensor = torch.tensor(obs_rl, dtype=torch.float32, device=config.device)
             base_tensor = torch.tensor(base_action, dtype=torch.float32, device=config.device)
-
-            action = residual_policy.get_action(
-                obs_tensor, base_tensor, xi=xi, deterministic=deterministic
-            )
-            exec_action = action.cpu().numpy()
+            if step_log:
+                with torch.no_grad():
+                    delta_raw, log_prob, mean = residual_policy(
+                        obs_tensor.unsqueeze(0), base_tensor.unsqueeze(0)
+                    )
+                    if deterministic:
+                        delta_raw = mean
+                    action = residual_policy.compose_action(
+                        base_tensor.unsqueeze(0), delta_raw, xi
+                    )
+                exec_action = action.squeeze(0).cpu().numpy()
+                delta_np = delta_raw.squeeze(0).cpu().numpy()
+                log_prob_val = float("nan") if deterministic else log_prob.item()
+            else:
+                action = residual_policy.get_action(
+                    obs_tensor, base_tensor, xi=xi, deterministic=deterministic
+                )
+                exec_action = action.cpu().numpy()
 
             next_obs, reward, terminated, truncated, info = env.step(exec_action)
             done = terminated or truncated
@@ -228,6 +295,22 @@ def evaluate_residual(
             episode_reward += reward
             episode_length += 1
             obs = next_obs
+            if step_log:
+                logger.info(
+                    "eval_res_step ep=%d step=%d reward=%.3f terminated=%d truncated=%d "
+                    "success=%s xi=%.3f base=%s delta=%s action=%s log_prob=%.3f",
+                    episode_id,
+                    t,
+                    reward,
+                    terminated,
+                    truncated,
+                    info.get("success", False),
+                    xi,
+                    np.array2string(base_action, precision=3, floatmode="fixed"),
+                    np.array2string(delta_np, precision=3, floatmode="fixed"),
+                    np.array2string(exec_action, precision=3, floatmode="fixed"),
+                    log_prob_val,
+                )
 
             if done:
                 break
@@ -237,6 +320,14 @@ def evaluate_residual(
         total_rewards.append(episode_reward)
         if probe_max_steps > 0:
             probe_steps_all.append(probe_steps)
+        if step_log:
+            logger.info(
+                "eval_res_end ep=%d reward=%.3f length=%d success=%s",
+                episode_id,
+                episode_reward,
+                episode_length,
+                info.get("success", False),
+            )
         pbar.update(1)
 
     pbar.close()
@@ -266,6 +357,7 @@ def evaluate_xi_sweep(
     xi_values: list[float],
     num_episodes: int = 20,
     probe_max_steps: int = 0,
+    step_log: bool = False,
     task_text: str = "",
 ) -> list[dict]:
     """Sweep over different xi values."""
@@ -276,7 +368,7 @@ def evaluate_xi_sweep(
         result = evaluate_residual(
             env, base_wrapper, residual_policy, adapter, config,
             xi=xi, num_episodes=num_episodes, probe_max_steps=probe_max_steps,
-            deterministic=True, task_text=task_text,
+            deterministic=True, step_log=step_log, task_text=task_text,
         )
         results.append(result)
         logger.info(f"xi={xi}: success_rate={result['success_rate']:.2%}")
@@ -294,10 +386,24 @@ def main():
     parser.add_argument("--xi-sweep", action="store_true", help="Sweep over xi values")
     parser.add_argument("--base-only", action="store_true", help="Only evaluate base policy")
     parser.add_argument("--probe-max-steps", type=int, default=None, help="Max probe steps before eval")
+    parser.add_argument(
+        "--step-log",
+        action="store_true",
+        help="Log per-step evaluation details (very verbose).",
+    )
+    parser.add_argument("--log-file", type=str, default=None, help="Write logs to file")
+    parser.add_argument("--log-mode", type=str, default="w", help="Log file mode (w/a)")
+    parser.add_argument(
+        "--no-console",
+        action="store_true",
+        help="Disable console logging when log file is set.",
+    )
     parser.add_argument("--output", type=str, default=None, help="Output JSON file for results")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--device", type=str, default="cuda", help="Device (cuda/cpu)")
     args = parser.parse_args()
+
+    _configure_logging(args.log_file, args.log_mode, args.no_console)
 
     # Load config
     if args.config:
@@ -380,6 +486,7 @@ def main():
         env, base_wrapper, adapter, config,
         num_episodes=args.num_episodes,
         probe_max_steps=probe_max_steps,
+        step_log=args.step_log,
     )
     all_results.append(base_result)
     logger.info(f"Base policy: success_rate={base_result['success_rate']:.2%}")
@@ -401,6 +508,7 @@ def main():
                 xi_values=xi_values,
                 num_episodes=min(args.num_episodes, 20),
                 probe_max_steps=probe_max_steps,
+                step_log=args.step_log,
             )
             all_results.extend(sweep_results)
 
@@ -413,7 +521,7 @@ def main():
             result = evaluate_residual(
                 env, base_wrapper, residual_policy, adapter, config,
                 xi=xi, num_episodes=args.num_episodes, probe_max_steps=probe_max_steps,
-                deterministic=True,
+                deterministic=True, step_log=args.step_log,
             )
             all_results.append(result)
             logger.info(f"Residual (xi={xi}): success_rate={result['success_rate']:.2%}")
@@ -422,7 +530,7 @@ def main():
             result_stoch = evaluate_residual(
                 env, base_wrapper, residual_policy, adapter, config,
                 xi=xi, num_episodes=args.num_episodes, probe_max_steps=probe_max_steps,
-                deterministic=False,
+                deterministic=False, step_log=args.step_log,
             )
             all_results.append(result_stoch)
             logger.info(f"Residual stochastic (xi={xi}): success_rate={result_stoch['success_rate']:.2%}")

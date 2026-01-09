@@ -697,7 +697,10 @@ def train_residual_rl(
             })
 
         if config.log_freq > 0 and episode > 0 and episode % config.log_freq == 0:
-            avg_q = _mean_loss(losses_episode, "q1_mean")
+            avg_q1 = _mean_loss(losses_episode, "q1_mean")
+            avg_q2 = _mean_loss(losses_episode, "q2_mean")
+            avg_q_base = _mean_loss(losses_episode, "q_base")
+            avg_q_res = _mean_loss(losses_episode, "q_res")
             avg_target_q = _mean_loss(losses_episode, "target_q_mean")
             avg_critic = _mean_loss(losses_episode, "critic_loss")
             avg_actor = _mean_loss(losses_episode, "actor_loss")
@@ -714,9 +717,9 @@ def train_residual_rl(
             avg_base_min = _mean_loss(losses_episode, "base_action_min")
             avg_base_max = _mean_loss(losses_episode, "base_action_max")
             logger.info(
-                "Episode %d (res_ep=%d, xi=%.3f, reward=%.2f, steps=%d, q=%.2f, "
-                "target_q=%.2f, critic=%.4f, actor=%.4f, alpha=%.3f, log_prob_used=%.3f, "
-                "log_prob_raw=%.3f, delta_abs=%.3f, tanh_abs=%.3f, "
+                "Episode %d (res_ep=%d, xi=%.3f, reward=%.2f, steps=%d, q1=%.2f, q2=%.2f, "
+                "qbase=%.2f, qres=%.2f, target_q=%.2f, critic=%.4f, actor=%.4f, alpha=%.3f, "
+                "log_prob_used=%.3f, log_prob_raw=%.3f, delta_abs=%.3f, tanh_abs=%.3f, "
                 "delta_std=%.3f, delta_clip=%.2f, act_clamp=%.2f, "
                 "res_l1=%.3f, actor_grad=%.3f, "
                 "base_min=%.2f, base_max=%.2f, offline=%d, online=%d) "
@@ -726,7 +729,10 @@ def train_residual_rl(
                 xi,
                 episode_reward,
                 episode_steps,
-                avg_q,
+                avg_q1,
+                avg_q2,
+                avg_q_base,
+                avg_q_res,
                 avg_target_q,
                 avg_critic,
                 avg_actor,
