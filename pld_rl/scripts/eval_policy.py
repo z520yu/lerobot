@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.distributions import Normal
 from tqdm import tqdm
 
 from pld_rl.configs.pld_config import PLDConfig
@@ -23,6 +24,7 @@ from pld_rl.envs.libero_adapter import LiberoAdapter, ProprioOnlyAdapter
 from pld_rl.envs.libero_make import make_libero_env
 from pld_rl.policies.pi05_base_wrapper import PI05BaseWrapper
 from pld_rl.policies.residual_gaussian import ResidualGaussianPolicy
+from pld_rl.rl.critics import DoubleQCritic
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 
@@ -92,7 +94,8 @@ def load_residual_policy(
     action_dim: int,
     hidden_dims: list[int],
     device: str = "cuda",
-) -> ResidualGaussianPolicy:
+    return_checkpoint: bool = False,
+) -> ResidualGaussianPolicy | tuple[ResidualGaussianPolicy, dict]:
     """Load trained residual policy from checkpoint."""
     policy = ResidualGaussianPolicy(
         obs_dim=obs_dim,
@@ -111,7 +114,30 @@ def load_residual_policy(
     policy.to(device)
     policy.eval()
     logger.info(f"Loaded residual policy from {checkpoint_path}")
+    if return_checkpoint:
+        return policy, checkpoint
     return policy
+
+
+def load_critic_from_checkpoint(
+    checkpoint: dict,
+    obs_dim: int,
+    action_dim: int,
+    hidden_dims: list[int],
+    device: str = "cuda",
+) -> DoubleQCritic | None:
+    """Load critic from checkpoint if available."""
+    if "critic" not in checkpoint:
+        return None
+    critic = DoubleQCritic(
+        obs_dim=obs_dim,
+        action_dim=action_dim,
+        hidden_dims=hidden_dims,
+    )
+    critic.load_state_dict(checkpoint["critic"])
+    critic.to(device)
+    critic.eval()
+    return critic
 
 
 def evaluate_base_only(
@@ -119,9 +145,11 @@ def evaluate_base_only(
     base_wrapper: PI05BaseWrapper,
     adapter: LiberoAdapter,
     config: PLDConfig,
+    critic: DoubleQCritic | None = None,
     num_episodes: int = 50,
     probe_max_steps: int = 0,
     step_log: bool = False,
+    step_log_interval: int = 1,
     task_text: str = "",
 ) -> dict:
     """Evaluate base policy only."""
@@ -159,8 +187,20 @@ def evaluate_base_only(
         episode_id = len(successes)
 
         for t in range(config.env_max_steps - probe_steps):
+            obs_prev = obs
             batch = adapter.env_obs_to_batch(obs, task_text_ep)
             action = base_wrapper.act(batch)
+            log_this_step = step_log and (t % step_log_interval == 0)
+            q1_val = q2_val = q_base_val = float("nan")
+            if log_this_step and critic is not None:
+                obs_rl = adapter.single_obs_to_rl_latent(obs_prev)
+                obs_tensor = torch.tensor(obs_rl, dtype=torch.float32, device=config.device)
+                base_tensor = torch.tensor(action, dtype=torch.float32, device=config.device)
+                with torch.no_grad():
+                    q1, q2 = critic(obs_tensor.unsqueeze(0), base_tensor.unsqueeze(0))
+                q1_val = q1.item()
+                q2_val = q2.item()
+                q_base_val = min(q1_val, q2_val)
 
             next_obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
@@ -168,10 +208,10 @@ def evaluate_base_only(
             episode_reward += reward
             episode_length += 1
             obs = next_obs
-            if step_log:
+            if log_this_step:
                 logger.info(
                     "eval_base_step ep=%d step=%d reward=%.3f terminated=%d truncated=%d "
-                    "success=%s action=%s",
+                    "success=%s action=%s q1=%.3f q2=%.3f qbase=%.3f",
                     episode_id,
                     t,
                     reward,
@@ -179,6 +219,9 @@ def evaluate_base_only(
                     truncated,
                     info.get("success", False),
                     np.array2string(action, precision=3, floatmode="fixed"),
+                    q1_val,
+                    q2_val,
+                    q_base_val,
                 )
 
             if done:
@@ -222,10 +265,12 @@ def evaluate_residual(
     adapter: LiberoAdapter,
     config: PLDConfig,
     xi: float,
+    critic: DoubleQCritic | None = None,
     num_episodes: int = 50,
     probe_max_steps: int = 0,
     deterministic: bool = True,
     step_log: bool = False,
+    step_log_interval: int = 1,
     task_text: str = "",
 ) -> dict:
     """Evaluate base + residual policy."""
@@ -270,19 +315,44 @@ def evaluate_residual(
             obs_rl = adapter.single_obs_to_rl_latent(obs)
             obs_tensor = torch.tensor(obs_rl, dtype=torch.float32, device=config.device)
             base_tensor = torch.tensor(base_action, dtype=torch.float32, device=config.device)
-            if step_log:
+            log_this_step = step_log and (t % step_log_interval == 0)
+            if log_this_step:
                 with torch.no_grad():
-                    delta_raw, log_prob, mean = residual_policy(
-                        obs_tensor.unsqueeze(0), base_tensor.unsqueeze(0)
+                    obs_batch = obs_tensor.unsqueeze(0)
+                    base_batch = base_tensor.unsqueeze(0)
+                    if residual_policy.include_base_action:
+                        policy_input = torch.cat([obs_batch, base_batch], dim=-1)
+                    else:
+                        policy_input = obs_batch
+                    features = residual_policy.backbone(policy_input)
+                    mean = residual_policy.mean_head(features)
+                    log_std = residual_policy.log_std_head(features)
+                    std = torch.clamp(
+                        log_std.exp(), residual_policy.std_min, residual_policy.std_max
                     )
+                    dist = Normal(mean, std)
                     if deterministic:
                         delta_raw = mean
+                    else:
+                        delta_raw = dist.rsample()
+                    log_prob = dist.log_prob(delta_raw).sum(-1)
                     action = residual_policy.compose_action(
-                        base_tensor.unsqueeze(0), delta_raw, xi
+                        base_batch, delta_raw, xi
                     )
                 exec_action = action.squeeze(0).cpu().numpy()
                 delta_np = delta_raw.squeeze(0).cpu().numpy()
+                mu_np = mean.squeeze(0).cpu().numpy()
+                var_np = std.squeeze(0).pow(2).cpu().numpy()
                 log_prob_val = float("nan") if deterministic else log_prob.item()
+                q1_val = q2_val = q_base_val = q_res_val = float("nan")
+                if critic is not None:
+                    with torch.no_grad():
+                        q1, q2 = critic(obs_batch, action)
+                        q_base1, q_base2 = critic(obs_batch, base_batch)
+                    q1_val = q1.item()
+                    q2_val = q2.item()
+                    q_base_val = min(q_base1.item(), q_base2.item())
+                    q_res_val = min(q1_val, q2_val)
             else:
                 action = residual_policy.get_action(
                     obs_tensor, base_tensor, xi=xi, deterministic=deterministic
@@ -295,10 +365,11 @@ def evaluate_residual(
             episode_reward += reward
             episode_length += 1
             obs = next_obs
-            if step_log:
+            if log_this_step:
                 logger.info(
                     "eval_res_step ep=%d step=%d reward=%.3f terminated=%d truncated=%d "
-                    "success=%s xi=%.3f base=%s delta=%s action=%s log_prob=%.3f",
+                    "success=%s xi=%.3f base=%s delta=%s action=%s log_prob=%.3f "
+                    "q1=%.3f q2=%.3f qbase=%.3f qres=%.3f mu=%s var=%s",
                     episode_id,
                     t,
                     reward,
@@ -310,6 +381,12 @@ def evaluate_residual(
                     np.array2string(delta_np, precision=3, floatmode="fixed"),
                     np.array2string(exec_action, precision=3, floatmode="fixed"),
                     log_prob_val,
+                    q1_val,
+                    q2_val,
+                    q_base_val,
+                    q_res_val,
+                    np.array2string(mu_np, precision=3, floatmode="fixed"),
+                    np.array2string(var_np, precision=3, floatmode="fixed"),
                 )
 
             if done:
@@ -355,9 +432,11 @@ def evaluate_xi_sweep(
     adapter: LiberoAdapter,
     config: PLDConfig,
     xi_values: list[float],
+    critic: DoubleQCritic | None = None,
     num_episodes: int = 20,
     probe_max_steps: int = 0,
     step_log: bool = False,
+    step_log_interval: int = 1,
     task_text: str = "",
 ) -> list[dict]:
     """Sweep over different xi values."""
@@ -367,8 +446,8 @@ def evaluate_xi_sweep(
     for xi in xi_values:
         result = evaluate_residual(
             env, base_wrapper, residual_policy, adapter, config,
-            xi=xi, num_episodes=num_episodes, probe_max_steps=probe_max_steps,
-            deterministic=True, step_log=step_log, task_text=task_text,
+            xi=xi, critic=critic, num_episodes=num_episodes, probe_max_steps=probe_max_steps,
+            deterministic=True, step_log=step_log, step_log_interval=step_log_interval, task_text=task_text,
         )
         results.append(result)
         logger.info(f"xi={xi}: success_rate={result['success_rate']:.2%}")
@@ -391,6 +470,12 @@ def main():
         action="store_true",
         help="Log per-step evaluation details (very verbose).",
     )
+    parser.add_argument(
+        "--step-log-interval",
+        type=int,
+        default=10,
+        help="Log every N steps when --step-log is enabled.",
+    )
     parser.add_argument("--log-file", type=str, default=None, help="Write logs to file")
     parser.add_argument("--log-mode", type=str, default="w", help="Log file mode (w/a)")
     parser.add_argument(
@@ -404,6 +489,7 @@ def main():
     args = parser.parse_args()
 
     _configure_logging(args.log_file, args.log_mode, args.no_console)
+    step_log_interval = max(1, args.step_log_interval)
 
     # Load config
     if args.config:
@@ -479,36 +565,56 @@ def main():
         n_action_steps=config.base_n_action_steps,
     )
 
-    all_results = []
-
-    # Evaluate base policy
-    base_result = evaluate_base_only(
-        env, base_wrapper, adapter, config,
-        num_episodes=args.num_episodes,
-        probe_max_steps=probe_max_steps,
-        step_log=args.step_log,
-    )
-    all_results.append(base_result)
-    logger.info(f"Base policy: success_rate={base_result['success_rate']:.2%}")
-
-    # Evaluate residual policy if provided
-    if args.residual_checkpoint and not args.base_only:
-        residual_policy = load_residual_policy(
+    residual_policy = None
+    residual_checkpoint = None
+    critic = None
+    if args.residual_checkpoint:
+        residual_policy, residual_checkpoint = load_residual_policy(
             checkpoint_path=args.residual_checkpoint,
             obs_dim=adapter.obs_dim,
             action_dim=config.action_dim,
             hidden_dims=config.residual_hidden_dims,
             device=config.device,
+            return_checkpoint=True,
         )
+        if args.step_log:
+            critic = load_critic_from_checkpoint(
+                residual_checkpoint,
+                obs_dim=adapter.obs_dim,
+                action_dim=config.action_dim,
+                hidden_dims=config.critic_hidden_dims,
+                device=config.device,
+            )
+            if critic is None:
+                logger.warning("No critic found in checkpoint; Q logging disabled.")
+
+    all_results = []
+
+    # Evaluate base policy
+    base_result = evaluate_base_only(
+        env, base_wrapper, adapter, config,
+        critic=critic,
+        num_episodes=args.num_episodes,
+        probe_max_steps=probe_max_steps,
+        step_log=args.step_log,
+        step_log_interval=step_log_interval,
+    )
+    all_results.append(base_result)
+    logger.info(f"Base policy: success_rate={base_result['success_rate']:.2%}")
+
+    # Evaluate residual policy if provided
+    if residual_policy is not None and not args.base_only:
         if args.xi_sweep:
             # Sweep over xi values
             xi_values = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
             sweep_results = evaluate_xi_sweep(
                 env, base_wrapper, residual_policy, adapter, config,
                 xi_values=xi_values,
+                critic=critic,
                 num_episodes=min(args.num_episodes, 20),
                 probe_max_steps=probe_max_steps,
                 step_log=args.step_log,
+                step_log_interval=step_log_interval,
             )
             all_results.extend(sweep_results)
 
@@ -520,8 +626,8 @@ def main():
             xi = args.xi if args.xi is not None else config.xi_final
             result = evaluate_residual(
                 env, base_wrapper, residual_policy, adapter, config,
-                xi=xi, num_episodes=args.num_episodes, probe_max_steps=probe_max_steps,
-                deterministic=True, step_log=args.step_log,
+                xi=xi, critic=critic, num_episodes=args.num_episodes, probe_max_steps=probe_max_steps,
+                deterministic=True, step_log=args.step_log, step_log_interval=step_log_interval,
             )
             all_results.append(result)
             logger.info(f"Residual (xi={xi}): success_rate={result['success_rate']:.2%}")
@@ -529,8 +635,8 @@ def main():
             # Also evaluate stochastic
             result_stoch = evaluate_residual(
                 env, base_wrapper, residual_policy, adapter, config,
-                xi=xi, num_episodes=args.num_episodes, probe_max_steps=probe_max_steps,
-                deterministic=False, step_log=args.step_log,
+                xi=xi, critic=critic, num_episodes=args.num_episodes, probe_max_steps=probe_max_steps,
+                deterministic=False, step_log=args.step_log, step_log_interval=step_log_interval,
             )
             all_results.append(result_stoch)
             logger.info(f"Residual stochastic (xi={xi}): success_rate={result_stoch['success_rate']:.2%}")
