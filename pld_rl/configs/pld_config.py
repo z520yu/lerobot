@@ -22,6 +22,25 @@ class PLDConfig:
     env_max_steps: int = 500
     action_dim: int = 7
     state_dim: int = 8  # pos:3 + axis_angle:3 + gripper:2 (lerobot convention)
+    ros_image_topics: list[str] = field(default_factory=lambda: [
+        "/gripper/camera/color/image_raw",
+        "/overall/camera/color/image_raw",
+        "/gripper/camera_fisheye/color/image_raw",
+    ])
+    ros_joint_topics: list[str] = field(default_factory=lambda: [
+        "/joint_states_gripper",
+        "/joint_states_single_gripper",
+    ])
+    ros_action_topic: str | None = "/residual_action"
+    ros_obs_timeout_s: float = 0.5
+    ros_spin_timeout_s: float = 0.05
+    ros_fixed_reward: float = 0.0
+    ros_task_text: str = ""
+    ros_state_source: str = "position"
+    ros_image_size: int | None = None
+    ros_use_cv_bridge: bool = False
+    ros_fake_random_offline: bool = True
+    ros_fake_offline_transitions: int | None = None
 
     # === Residual Policy ===
     residual_hidden_dims: list[int] = field(default_factory=lambda: [256, 256, 256])

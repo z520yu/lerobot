@@ -147,6 +147,33 @@ def _save_buffer(
     logger.info("Saved %s buffer with %d transitions to %s", stage, len(transitions), path)
 
 
+def _seed_random_offline(
+    replay_buffer: HybridReplayBuffer,
+    obs_dim: int,
+    action_dim: int,
+    num_transitions: int,
+) -> int:
+    rng = np.random.default_rng()
+    maxlen = replay_buffer.offline_buffer.maxlen or 0
+    target = min(num_transitions, maxlen) if maxlen else num_transitions
+    for _ in range(target):
+        obs = rng.standard_normal(obs_dim).astype(np.float32)
+        next_obs = rng.standard_normal(obs_dim).astype(np.float32)
+        action = rng.uniform(-1.0, 1.0, size=action_dim).astype(np.float32)
+        base_action = rng.uniform(-1.0, 1.0, size=action_dim).astype(np.float32)
+        next_base_action = rng.uniform(-1.0, 1.0, size=action_dim).astype(np.float32)
+        replay_buffer.add_offline(Transition(
+            obs=obs,
+            action=action,
+            base_action=base_action,
+            next_base_action=next_base_action,
+            reward=0.0,
+            next_obs=next_obs,
+            done=False,
+        ))
+    return target
+
+
 def _next_base_action_and_source(
     base_wrapper: PI05BaseWrapper,
     adapter: LiberoAdapter,
@@ -842,11 +869,41 @@ def main():
         logger.info("Buffer cache dir: %s", cache_dir)
 
     # Create environment
-    env = make_libero_env(
-        task_name=config.env_name,
-        task_id=config.task_id,
-        max_episode_steps=config.env_max_steps,
-    )
+    use_ros_env = config.env_name == "ros_fake"
+    if use_ros_env:
+        from pld_rl.envs.ros_adapter import ROSAdapter
+        from pld_rl.envs.ros_env import ROSFakeEnv
+
+        image_size = config.ros_image_size
+        if image_size is None and config.use_latent_encoder:
+            if config.encoder_type == "serl_resnet10":
+                image_size = config.serl_resnet10_image_size
+
+        ros_adapter = ROSAdapter(
+            image_topics=config.ros_image_topics,
+            joint_topics=config.ros_joint_topics,
+            state_dim=config.state_dim,
+            image_size=image_size,
+            state_source=config.ros_state_source,
+            use_cv_bridge=config.ros_use_cv_bridge,
+        )
+        env = ROSFakeEnv(
+            adapter=ros_adapter,
+            image_topics=config.ros_image_topics,
+            joint_topics=config.ros_joint_topics,
+            action_topic=config.ros_action_topic,
+            max_steps=config.env_max_steps,
+            obs_timeout_s=config.ros_obs_timeout_s,
+            spin_timeout_s=config.ros_spin_timeout_s,
+            reward=config.ros_fixed_reward,
+            task_text=config.ros_task_text,
+        )
+    else:
+        env = make_libero_env(
+            task_name=config.env_name,
+            task_id=config.task_id,
+            max_episode_steps=config.env_max_steps,
+        )
 
     # Create adapter
     if config.use_latent_encoder:
@@ -924,27 +981,51 @@ def main():
     offline_cache_path = cache_dir / "offline_buffer.pkl"
     offline_meta = _buffer_metadata(config, obs_dim, config.action_dim, stage="offline")
     offline_loaded = False
-    if offline_cache_path.exists():
-        transitions = _load_buffer(offline_cache_path, offline_meta, stage="offline")
-        if transitions:
-            for trans in transitions:
-                replay_buffer.add_offline(trans)
+    if use_ros_env:
+        if config.ros_fake_random_offline and config.offline_buffer_capacity > 0:
+            target = config.ros_fake_offline_transitions
+            if target is None:
+                target = min(config.offline_buffer_capacity, max(config.batch_size, 1024))
+            added = _seed_random_offline(
+                replay_buffer,
+                obs_dim=obs_dim,
+                action_dim=config.action_dim,
+                num_transitions=target,
+            )
+            offline_loaded = added > 0
+            logger.info("Seeded %d random offline transitions for ros_fake.", added)
+        else:
+            logger.info("Skipping offline collection for ros_fake.")
             offline_loaded = True
-    if not offline_loaded:
-        collect_offline_data(
-            env, base_wrapper, adapter, replay_buffer, config,
-        )
-        _save_buffer(
-            offline_cache_path,
-            list(replay_buffer.offline_buffer),
-            offline_meta,
-            stage="offline",
-        )
+    else:
+        if offline_cache_path.exists():
+            transitions = _load_buffer(offline_cache_path, offline_meta, stage="offline")
+            if transitions:
+                for trans in transitions:
+                    replay_buffer.add_offline(trans)
+                offline_loaded = True
+        if not offline_loaded:
+            collect_offline_data(
+                env, base_wrapper, adapter, replay_buffer, config,
+            )
+            _save_buffer(
+                offline_cache_path,
+                list(replay_buffer.offline_buffer),
+                offline_meta,
+                stage="offline",
+            )
 
     # Step 2: Pretrain critic with Cal-QL
-    pretrain_critic_calql(
-        critic, target_critic, residual_policy, replay_buffer, config,
-    )
+    if config.calql_pretrain_steps > 0 and replay_buffer.offline_size > 0:
+        pretrain_critic_calql(
+            critic, target_critic, residual_policy, replay_buffer, config,
+        )
+    else:
+        logger.info(
+            "Skipping Cal-QL pretrain (steps=%d offline_size=%d).",
+            config.calql_pretrain_steps,
+            replay_buffer.offline_size,
+        )
 
     # Step 3: Collect or load warmup online data
     warmup_loaded = False

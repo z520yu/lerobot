@@ -2,6 +2,8 @@
 
 from pld_rl.envs.libero_adapter import LiberoAdapter, ProprioOnlyAdapter
 from pld_rl.envs.libero_make import make_libero_env, DummyLiberoEnv
+from pld_rl.envs.ros_adapter import ROSAdapter
+from pld_rl.envs.ros_env import ROSFakeEnv
 from pld_rl.rl.encoders import ResNetV1Encoder
 
 __all__ = [
@@ -9,5 +11,7 @@ __all__ = [
     "ProprioOnlyAdapter",
     "make_libero_env",
     "DummyLiberoEnv",
+    "ROSAdapter",
+    "ROSFakeEnv",
     "ResNetV1Encoder",
 ]
