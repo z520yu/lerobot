@@ -22,6 +22,7 @@ class PLDConfig:
     env_max_steps: int = 500
     action_dim: int = 7
     state_dim: int = 8  # pos:3 + axis_angle:3 + gripper:2 (lerobot convention)
+    num_cams: int = 2
     ros_image_topics: list[str] = field(default_factory=lambda: [
         "/gripper/camera/color/image_raw",
         "/overall/camera/color/image_raw",
@@ -133,7 +134,7 @@ class PLDConfig:
     def obs_dim(self) -> int:
         """Calculate observation dimension for residual policy."""
         if self.use_latent_encoder:
-            return 2 * self.latent_dim + self.state_dim
+            return self.num_cams * self.latent_dim + self.state_dim
         return self.state_dim
 
     @classmethod

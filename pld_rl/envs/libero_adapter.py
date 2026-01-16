@@ -20,9 +20,19 @@ DEFAULT_IMAGE_KEY_MAPPING = {
     # LeRobot keys (passthrough)
     "observation.images.image": "observation.images.image",
     "observation.images.image2": "observation.images.image2",
+    "observation.images.image3": "observation.images.image3",
     # Alternative naming
     "image": "observation.images.image",
     "wrist_image": "observation.images.image2",
+    "image2": "observation.images.image2",
+    "image3": "observation.images.image3",
+    "wrist_image2": "observation.images.image3",
+    # Piper naming
+    "cam_high": "observation.images.image",
+    "cam_left": "observation.images.image2",
+    "cam_right": "observation.images.image3",
+    "cam_left_wrist": "observation.images.image2",
+    "cam_right_wrist": "observation.images.image3",
 }
 
 DEFAULT_STATE_KEY_MAPPING = {
@@ -50,6 +60,7 @@ class LiberoAdapter:
         latent_dim: int = 256,
         state_dim: int = 9,
         image_key_mapping: dict[str, str] | None = None,
+        num_cams: int = 2,
         single_camera: bool = False,
         normalize_images: bool | None = None,
         freeze_encoder: bool = True,
@@ -61,11 +72,15 @@ class LiberoAdapter:
             latent_dim: Output dimension of visual encoder
             state_dim: Dimension of proprioceptive state
             image_key_mapping: Custom mapping from env keys to standard keys
+            num_cams: Number of cameras to use (>=1)
             single_camera: If True, only use single camera (duplicate for second)
         """
         self.device = device
         self.latent_dim = latent_dim
         self.state_dim = state_dim
+        if num_cams < 1:
+            raise ValueError(f"num_cams must be >= 1, got {num_cams}")
+        self.num_cams = num_cams
         self.single_camera = single_camera
 
         # Key mapping
@@ -106,6 +121,34 @@ class LiberoAdapter:
             self.freeze_encoder,
             self.normalize_images,
         )
+
+    def _target_image_keys(self) -> list[str]:
+        keys = []
+        for idx in range(self.num_cams):
+            if idx == 0:
+                keys.append("observation.images.image")
+            else:
+                keys.append(f"observation.images.image{idx + 1}")
+        return keys
+
+    def _flatten_obs(self, obs: dict) -> dict:
+        flat = dict(obs)
+        images = obs.get("images")
+        if isinstance(images, dict):
+            for key, val in images.items():
+                flat.setdefault(key, val)
+
+        observation = obs.get("observation")
+        if isinstance(observation, dict):
+            if "state" in observation:
+                flat.setdefault("observation.state", observation["state"])
+            obs_images = observation.get("images")
+            if isinstance(obs_images, dict):
+                for key, val in obs_images.items():
+                    flat.setdefault(f"observation.images.{key}", val)
+                    flat.setdefault(key, val)
+
+        return flat
 
     def _find_image_key(self, obs: dict, target: str) -> str | None:
         """Find the actual key in obs that maps to target."""
@@ -176,16 +219,20 @@ class LiberoAdapter:
         }
 
         # Images
-        img1_key = self._find_image_key(batch, "observation.images.image")
-        if img1_key:
-            result["observation.images.image"] = batch[img1_key]
-
-        img2_key = self._find_image_key(batch, "observation.images.image2")
-        if img2_key:
-            result["observation.images.image2"] = batch[img2_key]
-        elif self.single_camera and img1_key:
-            # Duplicate first camera
-            result["observation.images.image2"] = batch[img1_key].clone()
+        target_keys = self._target_image_keys()
+        first_image = None
+        for target_key in target_keys:
+            img_key = self._find_image_key(batch, target_key)
+            if img_key:
+                image = batch[img_key]
+                if first_image is None:
+                    first_image = image
+                result[target_key] = image
+            elif self.single_camera and first_image is not None:
+                if isinstance(first_image, torch.Tensor):
+                    result[target_key] = first_image.clone()
+                else:
+                    result[target_key] = first_image
 
         # State
         if "observation.state" in batch:
@@ -212,32 +259,34 @@ class LiberoAdapter:
             (B, obs_dim) observation vector
         """
         # 1. Extract visual features
-        img1_key = self._find_image_key(batch, "observation.images.image")
-        img2_key = self._find_image_key(batch, "observation.images.image2")
+        target_keys = self._target_image_keys()
+        images = []
+        first_image = None
+        for target_key in target_keys:
+            img_key = self._find_image_key(batch, target_key)
+            if img_key is None:
+                if self.single_camera and first_image is not None:
+                    image = first_image.clone()
+                else:
+                    raise ValueError(
+                        f"Could not find image for {target_key}. Keys: {list(batch.keys())}"
+                    )
+            else:
+                image = batch[img_key].to(self.device)
+                if first_image is None:
+                    first_image = image
 
-        if img1_key is None:
-            raise ValueError(f"Could not find primary image in batch. Keys: {list(batch.keys())}")
+            if self.normalize_images:
+                image = (image.float() - self._image_mean) / self._image_std
+            images.append(image)
 
-        image1 = batch[img1_key].to(self.device)
-
-        if img2_key is not None:
-            image2 = batch[img2_key].to(self.device)
-        elif self.single_camera:
-            image2 = image1.clone()
-        else:
-            raise ValueError(f"Could not find secondary image in batch. Keys: {list(batch.keys())}")
-
-        if self.normalize_images:
-            image1 = (image1.float() - self._image_mean) / self._image_std
-            image2 = (image2.float() - self._image_mean) / self._image_std
-
-        # Stack cameras: (B, 2, C, H, W)
-        images = torch.stack([image1, image2], dim=1)
+        # Stack cameras: (B, N, C, H, W)
+        images = torch.stack(images, dim=1)
         if self.freeze_encoder and not self.encoder_handles_freeze:
             with torch.no_grad():
-                visual_latent = self.encoder(images)  # (B, 2 * latent_dim)
+                visual_latent = self.encoder(images)  # (B, N * latent_dim)
         else:
-            visual_latent = self.encoder(images)  # (B, 2 * latent_dim)
+            visual_latent = self.encoder(images)  # (B, N * latent_dim)
 
         # 2. Proprioception
         if "observation.state" in batch:
@@ -286,25 +335,27 @@ class LiberoAdapter:
         """Normalize observation keys to standard format."""
         result = {}
 
-        # Handle images
-        img1_key = self._find_image_key(obs, "observation.images.image")
-        if img1_key:
-            img = obs[img1_key]
-            img = self._process_image(img)
-            result["observation.images.image"] = img
+        flat_obs = self._flatten_obs(obs)
 
-        img2_key = self._find_image_key(obs, "observation.images.image2")
-        if img2_key:
-            img2 = obs[img2_key]
-            img2 = self._process_image(img2)
-            result["observation.images.image2"] = img2
-        elif self.single_camera and img1_key:
-            result["observation.images.image2"] = result["observation.images.image"].copy() \
-                if isinstance(result["observation.images.image"], np.ndarray) \
-                else result["observation.images.image"].clone()
+        # Handle images
+        target_keys = self._target_image_keys()
+        first_image = None
+        for target_key in target_keys:
+            img_key = self._find_image_key(flat_obs, target_key)
+            if img_key:
+                img = flat_obs[img_key]
+                img = self._process_image(img)
+                if first_image is None:
+                    first_image = img
+                result[target_key] = img
+            elif self.single_camera and first_image is not None:
+                if isinstance(first_image, np.ndarray):
+                    result[target_key] = first_image.copy()
+                else:
+                    result[target_key] = first_image.clone()
 
         # Handle state
-        state = self._find_state(obs)
+        state = self._find_state(flat_obs)
         if state is not None:
             if isinstance(state, np.ndarray):
                 state = torch.tensor(state, dtype=torch.float32)
@@ -357,7 +408,7 @@ class LiberoAdapter:
     @property
     def obs_dim(self) -> int:
         """Calculate observation dimension for residual policy (without base_action)."""
-        return 2 * self.latent_dim + self.state_dim
+        return self.num_cams * self.latent_dim + self.state_dim
 
 
 class ProprioOnlyAdapter:

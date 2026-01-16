@@ -19,6 +19,7 @@ class ResidualGaussianPolicy(nn.Module):
         std_min: float = 1e-5,
         std_max: float = 5.0,
         include_base_action: bool = True,
+        clamp_action: bool = True,
     ):
         super().__init__()
         if hidden_dims is None:
@@ -46,6 +47,7 @@ class ResidualGaussianPolicy(nn.Module):
         self.std_max = std_max
         self.include_base_action = include_base_action
         self.action_dim = action_dim
+        self.clamp_action = clamp_action
 
         # Initialize weights
         self._init_weights()
@@ -72,7 +74,9 @@ class ResidualGaussianPolicy(nn.Module):
         xi_tensor = torch.as_tensor(xi, device=base_action.device, dtype=base_action.dtype)
         delta = torch.tanh(delta_raw)
         action = base_action + xi_tensor * delta
-        return torch.clamp(action, -1.0, 1.0)
+        if self.clamp_action:
+            return torch.clamp(action, -1.0, 1.0)
+        return action
 
     def log_prob_action(
         self,

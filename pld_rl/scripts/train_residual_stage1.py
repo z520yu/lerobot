@@ -931,6 +931,7 @@ def main():
             device=config.device,
             latent_dim=config.latent_dim,
             state_dim=config.state_dim,
+            num_cams=config.num_cams,
             freeze_encoder=config.freeze_encoder,
         )
     else:
