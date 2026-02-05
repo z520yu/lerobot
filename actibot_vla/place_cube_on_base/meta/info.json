@@ -1,0 +1,144 @@
+{
+    "codebase_version": "v2.1",
+    "robot_type": "piper",
+    "total_episodes": 26,
+    "total_frames": 17976,
+    "total_tasks": 1,
+    "total_videos": 52,
+    "total_chunks": 1,
+    "chunks_size": 1000,
+    "fps": 30,
+    "splits": {
+        "train": "0:26"
+    },
+    "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+    "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
+    "features": {
+        "action": {
+            "dtype": "float32",
+            "shape": [
+                7
+            ],
+            "names": [
+                "leader_joint_1",
+                "leader_joint_2",
+                "leader_joint_3",
+                "leader_joint_4",
+                "leader_joint_5",
+                "leader_joint_6",
+                "leader_gripper"
+            ]
+        },
+        "observation.state": {
+            "dtype": "float32",
+            "shape": [
+                7
+            ],
+            "names": [
+                "follower_joint_1",
+                "follower_joint_2",
+                "follower_joint_3",
+                "follower_joint_4",
+                "follower_joint_5",
+                "follower_joint_6",
+                "follower_gripper"
+            ]
+        },
+        "observation.effort": {
+            "dtype": "float32",
+            "shape": [
+                7
+            ],
+            "names": [
+                "follower_joint_1",
+                "follower_joint_2",
+                "follower_joint_3",
+                "follower_joint_4",
+                "follower_joint_5",
+                "follower_joint_6",
+                "follower_gripper"
+            ]
+        },
+        "observation.images.cam_top": {
+            "dtype": "video",
+            "shape": [
+                240,
+                424,
+                3
+            ],
+            "names": [
+                "height",
+                "width",
+                "channels"
+            ],
+            "info": {
+                "video.fps": 30.0,
+                "video.height": 240,
+                "video.width": 424,
+                "video.channels": 3,
+                "video.codec": "h264",
+                "video.pix_fmt": "yuv420p",
+                "video.is_depth_map": false,
+                "has_audio": false
+            }
+        },
+        "observation.images.cam_right": {
+            "dtype": "video",
+            "shape": [
+                240,
+                424,
+                3
+            ],
+            "names": [
+                "height",
+                "width",
+                "channels"
+            ],
+            "info": {
+                "video.fps": 30.0,
+                "video.height": 240,
+                "video.width": 424,
+                "video.channels": 3,
+                "video.codec": "h264",
+                "video.pix_fmt": "yuv420p",
+                "video.is_depth_map": false,
+                "has_audio": false
+            }
+        },
+        "timestamp": {
+            "dtype": "float32",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "frame_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "episode_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "task_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        }
+    }
+}
